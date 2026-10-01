@@ -21,6 +21,7 @@ pub enum Material {
     Plastic,
     Tungsten,
     Uranium,
+    Silicon,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +32,18 @@ pub enum Dir {
     S,
     W,
     All,
+}
+
+impl Dir {
+    pub fn opposite(self) -> Dir {
+        match self {
+            Dir::N => Dir::S,
+            Dir::E => Dir::W,
+            Dir::S => Dir::N,
+            Dir::W => Dir::E,
+            Dir::All => Dir::All,
+        }
+    }
 }
 
 pub type ShipId = u64;
@@ -47,6 +60,8 @@ pub enum ClientMsg {
     MoveMass { ship: ShipId, from: Cell, to: Cell, kg: f32 },
     /// One-shot emission for the next tick. Client resends while a key is held.
     /// `energy` in J, `mass` in kg; both clamped by the server.
+    /// Requesting >= 1 J also acts as a control signal: it points a silicon
+    /// block at `dir` (`all` = off).
     Emit { ship: ShipId, block: Cell, dir: Dir, energy: f32, mass: f32 },
     /// Collect nearby mass packets.
     /// Without `block`: into all matching-material blocks of the ship.
@@ -101,6 +116,9 @@ pub struct BlockView {
     pub mass: f32,
     /// J
     pub energy: f32,
+    /// Silicon only: the face energy flows out of. Absent = not conducting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<Dir>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -276,6 +276,13 @@ impl World {
         else {
             return;
         };
+        if req_energy >= consts::SIGNAL_MIN_ENERGY {
+            if let Some(b) = self.ships.get_mut(&ship_id).and_then(|s| s.blocks.get_mut(&cell)) {
+                if material == Material::Silicon {
+                    b.dir = (dir != Dir::All).then_some(dir);
+                }
+            }
+        }
         let props = consts::props(material);
         let energy_amt = req_energy.max(0.0).min(energy0).min(props.energy_emit_rate);
         let remaining_energy = (energy0 - energy_amt).max(0.0);
@@ -367,13 +374,12 @@ impl World {
     fn apply_conduction(&mut self) {
         for ship in self.ships.values_mut() {
             let scale = if ship.owner.is_none() { consts::ASTEROID_CONDUCTION } else { 1.0 };
-            let snapshot: Vec<(Cell, Material, f32)> = ship.blocks.iter().map(|(&c, b)| (c, b.material, b.energy)).collect();
             let mut deltas: HashMap<Cell, f32> = HashMap::new();
-            for &(cell, material, energy) in &snapshot {
-                let cap_a = consts::props(material).energy_capacity;
-                let cond_a = consts::props(material).conductance;
-                let fill_a = energy / cap_a;
-                for (dx, dy) in [(1, 0), (0, 1)] {
+            for (&cell, a) in &ship.blocks {
+                let cap_a = consts::props(a.material).energy_capacity;
+                let cond_a = consts::props(a.material).conductance;
+                let fill_a = a.energy / cap_a;
+                for (dx, dy, pair_dir) in [(1, 0, Dir::E), (0, 1, Dir::N)] {
                     let ncell = [cell[0] + dx, cell[1] + dy];
                     if let Some(nb) = ship.blocks.get(&ncell) {
                         let cap_b = consts::props(nb.material).energy_capacity;
@@ -381,6 +387,13 @@ impl World {
                         let fill_b = nb.energy / cap_b;
                         let k = cond_a.min(cond_b) * scale;
                         let flow = k * (fill_a - fill_b) * cap_a.min(cap_b) / 2.0;
+                        // Silicon only lets energy flow along its direction.
+                        let (a_fwd, a_back) = a.conduction_gate(pair_dir);
+                        let (b_fwd, b_back) = nb.conduction_gate(pair_dir);
+                        let allowed = if flow > 0.0 { a_fwd && b_fwd } else { a_back && b_back };
+                        if !allowed {
+                            continue;
+                        }
                         *deltas.entry(cell).or_insert(0.0) -= flow;
                         *deltas.entry(ncell).or_insert(0.0) += flow;
                     }
@@ -560,7 +573,7 @@ mod tests {
     /// A single-block ship placed at `pos`, block centred at local (0,0).
     fn single_block_ship(w: &mut World, id: ShipId, pos: [f32; 2], material: Material, mass: f32, energy: f32) {
         let mut ship = Ship::new(id, None);
-        ship.blocks.insert([0, 0], Block { material, mass, energy });
+        ship.blocks.insert([0, 0], Block::new(material, mass, energy));
         ship.recompute_com_inertia();
         ship.pos = pos;
         w.ships.insert(id, ship);
@@ -570,8 +583,8 @@ mod tests {
     fn conduction_conserves_energy_and_flows_high_to_low() {
         let mut w = World::new(1);
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Copper, mass: 100.0, energy: 1_000_000.0 });
-        ship.blocks.insert([1, 0], Block { material: Material::Copper, mass: 100.0, energy: 0.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Copper, 100.0, 1_000_000.0));
+        ship.blocks.insert([1, 0], Block::new(Material::Copper, 100.0, 0.0));
         ship.recompute_com_inertia();
         w.ships.insert(1, ship);
         let total_before: f32 = w.ships[&1].blocks.values().map(|b| b.energy).sum();
@@ -589,14 +602,14 @@ mod tests {
     fn plastic_conducts_much_slower_than_copper() {
         let mut w = World::new(1);
         let mut copper = Ship::new(1, None);
-        copper.blocks.insert([0, 0], Block { material: Material::Copper, mass: 100.0, energy: 1_000_000.0 });
-        copper.blocks.insert([1, 0], Block { material: Material::Copper, mass: 100.0, energy: 0.0 });
+        copper.blocks.insert([0, 0], Block::new(Material::Copper, 100.0, 1_000_000.0));
+        copper.blocks.insert([1, 0], Block::new(Material::Copper, 100.0, 0.0));
         copper.recompute_com_inertia();
         w.ships.insert(1, copper);
 
         let mut plastic = Ship::new(2, None);
-        plastic.blocks.insert([0, 0], Block { material: Material::Plastic, mass: 100.0, energy: 400_000.0 });
-        plastic.blocks.insert([1, 0], Block { material: Material::Plastic, mass: 100.0, energy: 0.0 });
+        plastic.blocks.insert([0, 0], Block::new(Material::Plastic, 100.0, 400_000.0));
+        plastic.blocks.insert([1, 0], Block::new(Material::Plastic, 100.0, 0.0));
         plastic.recompute_com_inertia();
         w.ships.insert(2, plastic);
 
@@ -611,7 +624,7 @@ mod tests {
     fn uranium_produces_energy_and_loses_mass() {
         let mut w = World::new(1);
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Uranium, mass: 1000.0, energy: 0.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Uranium, 1000.0, 0.0));
         ship.recompute_com_inertia();
         w.ships.insert(1, ship);
 
@@ -695,8 +708,8 @@ mod tests {
     fn off_centre_thrust_produces_rotation() {
         let mut w = World::new(1);
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Lead, mass: 1000.0, energy: 0.0 });
-        ship.blocks.insert([1, 0], Block { material: Material::Lead, mass: 1000.0, energy: 1_000_000.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Lead, 1000.0, 0.0));
+        ship.blocks.insert([1, 0], Block::new(Material::Lead, 1000.0, 1_000_000.0));
         ship.recompute_com_inertia();
         w.ships.insert(1, ship);
 
@@ -729,6 +742,63 @@ mod tests {
         assert!(ray.beam);
         approx(ray.emitted, 100_000.0, 1.0);
         approx(ray.energy, 0.0, 1e-6);
+    }
+
+    /// Ship 1: a full copper block at (0,0), `middle` at (1,0), an empty copper block at (2,0).
+    fn three_block_row(w: &mut World, middle: Material) {
+        let mut ship = Ship::new(1, Some("p".into()));
+        ship.blocks.insert([0, 0], Block::new(Material::Copper, 100.0, 1_000_000.0));
+        ship.blocks.insert([1, 0], Block::new(middle, 100.0, 0.0));
+        ship.blocks.insert([2, 0], Block::new(Material::Copper, 100.0, 0.0));
+        ship.recompute_com_inertia();
+        w.ships.insert(1, ship);
+    }
+
+    fn energy_at(w: &World, cell: Cell) -> f32 {
+        w.ships[&1].blocks[&cell].energy
+    }
+
+    #[test]
+    fn weak_emit_request_is_not_a_signal() {
+        let mut w = World::new(1);
+        three_block_row(&mut w, Material::Silicon);
+
+        w.process_emit(&[], 1, [1, 0], Dir::E, 0.5, 0.0);
+
+        assert_eq!(w.ships[&1].blocks[&[1, 0]].dir, None);
+    }
+
+    #[test]
+    fn silicon_conducts_one_way_along_its_direction() {
+        // Unoriented: isolator.
+        let mut w = World::new(1);
+        three_block_row(&mut w, Material::Silicon);
+        w.apply_conduction();
+        approx(energy_at(&w, [1, 0]), 0.0, 1e-6);
+
+        // Pointing east: takes from the west block, passes to the east block.
+        w.process_emit(&[], 1, [1, 0], Dir::E, 1.0, 0.0);
+        w.apply_conduction();
+        w.apply_conduction();
+        assert!(energy_at(&w, [2, 0]) > 0.0, "energy should flow along the silicon direction");
+
+        // Pointing west: the full block is now "ahead", so nothing flows out of it.
+        let mut w = World::new(1);
+        three_block_row(&mut w, Material::Silicon);
+        w.process_emit(&[], 1, [1, 0], Dir::W, 1.0, 0.0);
+        w.apply_conduction();
+        approx(energy_at(&w, [0, 0]), 1_000_000.0, 1e-3);
+
+        // Pointing north: both neighbours are to the side.
+        let mut w = World::new(1);
+        three_block_row(&mut w, Material::Silicon);
+        w.process_emit(&[], 1, [1, 0], Dir::N, 1.0, 0.0);
+        w.apply_conduction();
+        approx(energy_at(&w, [0, 0]), 1_000_000.0, 1e-3);
+
+        // `all` switches it off again.
+        w.process_emit(&[], 1, [1, 0], Dir::All, 1.0, 0.0);
+        assert_eq!(w.ships[&1].blocks[&[1, 0]].dir, None);
     }
 
     #[test]

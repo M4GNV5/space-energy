@@ -61,7 +61,7 @@ pub fn make_starter_ship(world: &mut World, owner: String) -> ShipId {
     let mut ship = Ship::new(id, Some(owner));
     for (cell, material, mass) in STARTER_LAYOUT {
         let cap = consts::props(material).energy_capacity;
-        ship.blocks.insert(cell, Block { material, mass, energy: cap * 0.1 });
+        ship.blocks.insert(cell, Block::new(material, mass, cap * 0.1));
     }
     ship.recompute_com_inertia();
 
@@ -110,8 +110,15 @@ fn random_blob(rng: &mut ChaCha8Rng, n: usize) -> Vec<Cell> {
     cells
 }
 
-const ASTEROID_MATERIALS: [Material; 6] =
-    [Material::Iron, Material::Copper, Material::Lead, Material::Plastic, Material::Tungsten, Material::Uranium];
+const ASTEROID_MATERIALS: [Material; 7] = [
+    Material::Iron,
+    Material::Copper,
+    Material::Lead,
+    Material::Plastic,
+    Material::Tungsten,
+    Material::Uranium,
+    Material::Silicon,
+];
 
 /// Builds an unowned asteroid ship at `pos` with random blocks/mass/velocity/spin.
 pub fn build_asteroid(rng: &mut ChaCha8Rng, id: ShipId, pos: [f32; 2]) -> Ship {
@@ -123,7 +130,7 @@ pub fn build_asteroid(rng: &mut ChaCha8Rng, id: ShipId, pos: [f32; 2]) -> Ship {
         let material = ASTEROID_MATERIALS[rng.random_range(0..ASTEROID_MATERIALS.len())];
         let max_mass = consts::props(material).max_mass;
         let frac: f32 = rng.random_range(0.2..=1.0);
-        ship.blocks.insert(cell, Block { material, mass: max_mass * frac, energy: 0.0 });
+        ship.blocks.insert(cell, Block::new(material, max_mass * frac, 0.0));
     }
     ship.recompute_com_inertia();
 

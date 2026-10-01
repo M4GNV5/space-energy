@@ -28,6 +28,7 @@ pub fn props(m: Material) -> &'static MaterialProps {
         Material::Plastic => &PLASTIC,
         Material::Tungsten => &TUNGSTEN,
         Material::Uranium => &URANIUM,
+        Material::Silicon => &SILICON,
     }
 }
 
@@ -73,6 +74,19 @@ const URANIUM: MaterialProps = MaterialProps {
     energy_emit_rate: 5_000.0,
     mass_emit_rate: 1.0,
 };
+/// One-way conductor: `conductance` applies only along its direction, otherwise 0.
+const SILICON: MaterialProps = MaterialProps {
+    max_mass: 2330.0,
+    energy_capacity: 1.0e6,
+    conductance: 0.2,
+    energy_emit_rate: 1_000.0,
+    mass_emit_rate: 1.0,
+};
+
+// --- Control signals (silicon) ---
+/// An emit command requesting at least this much energy (J) counts as a control
+/// signal for the block, even if the block has no energy to emit.
+pub const SIGNAL_MIN_ENERGY: f32 = 1.0;
 
 /// Minimum mass of an existing block (kg). Below this it is removed.
 pub const MIN_BLOCK_MASS: f32 = 1.0;

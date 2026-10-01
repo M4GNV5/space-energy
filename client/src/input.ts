@@ -209,9 +209,10 @@ export class InputController {
     const mat = MATERIALS[b.m];
     const fillPct = mat.energyCapacity > 0 ? Math.round((b.energy / mat.energyCapacity) * 100) : 0;
     const owner = this.hover.ship.owner ?? "asteroid";
+    const control = b.m === "silicon" ? (b.dir ? ` — points ${b.dir}` : " — off") : "";
     this.tooltipEl.innerHTML =
       `ship #${this.hover.ship.id} — ${escapeHtml(owner)}<br/>` +
-      `${b.m}<br/>` +
+      `${b.m}${control}<br/>` +
       `mass ${formatMass(b.mass)}/${mat.maxMass} kg<br/>` +
       `energy ${formatEnergy(b.energy)}/${formatEnergy(mat.energyCapacity)} (${fillPct}%)`;
     this.tooltipEl.classList.remove("hidden");

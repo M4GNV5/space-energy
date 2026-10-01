@@ -11,7 +11,7 @@
 //   `[x, y] + rotate(rot) * (p - com)`.
 // - Face directions are ship-local: n = +y, e = +x, s = -y, w = -x.
 
-export type Material = "iron" | "copper" | "lead" | "plastic" | "tungsten" | "uranium";
+export type Material = "iron" | "copper" | "lead" | "plastic" | "tungsten" | "uranium" | "silicon";
 export type Dir = "n" | "e" | "s" | "w" | "all";
 export type ShipId = number;
 export type Cell = [number, number];
@@ -24,12 +24,13 @@ export const MATERIALS: Record<Material, { maxMass: number; energyCapacity: numb
   plastic: { maxMass: 1200, energyCapacity: 0.5e6, color: "#e8e2c8" },
   tungsten: { maxMass: 19300, energyCapacity: 2.0e7, color: "#3e8a7e" },
   uranium: { maxMass: 19000, energyCapacity: 4.0e6, color: "#6fcf3f" },
-};
+  silicon: { maxMass: 2330, energyCapacity: 1.0e6, color: "#3b5bb5" },};
 
 export type ClientMsg =
   | { t: "login"; name: string }
   | { t: "view"; x: number; y: number; r: number }
   | { t: "move_mass"; ship: ShipId; from: Cell; to: Cell; kg: number }
+  // Requesting >= 1 J also points a silicon block at `dir` ("all" = off).
   | { t: "emit"; ship: ShipId; block: Cell; dir: Dir; energy: number; mass: number }
   | { t: "collect"; ship: ShipId; block?: Cell; material?: Material };
 
@@ -68,6 +69,8 @@ export interface BlockView {
   mass: number;
   /** J */
   energy: number;
+  /** Silicon only: the face energy flows out of. Absent = not conducting. */
+  dir?: Dir;
 }
 
 export interface SunView {

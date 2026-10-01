@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::protocol::{Cell, Material, ShipId};
+use crate::protocol::{Cell, Dir, Material, ShipId};
 use crate::sim::consts::{self, MIN_BLOCK_MASS};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -10,6 +10,28 @@ pub struct Block {
     pub material: Material,
     pub mass: f32,
     pub energy: f32,
+    /// Silicon: the face energy flows out of. `None` = not conducting.
+    pub dir: Option<Dir>,
+}
+
+impl Block {
+    pub fn new(material: Material, mass: f32, energy: f32) -> Self {
+        Block { material, mass, energy, dir: None }
+    }
+
+    /// Which way energy may flow between a pair of adjacent blocks a -> b,
+    /// where b lies at `pair_dir` from a: (a -> b allowed, b -> a allowed).
+    /// Called on both blocks of the pair with the same `pair_dir`.
+    pub fn conduction_gate(&self, pair_dir: Dir) -> (bool, bool) {
+        match self.material {
+            Material::Silicon => match self.dir {
+                Some(d) if d == pair_dir => (true, false),
+                Some(d) if d == pair_dir.opposite() => (false, true),
+                _ => (false, false),
+            },
+            _ => (true, true),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -184,7 +206,7 @@ impl Ship {
             fb.mass -= kg_clamped;
         }
         if !to_exists {
-            self.blocks.insert(to, Block { material, mass: 0.0, energy: 0.0 });
+            self.blocks.insert(to, Block::new(material, 0.0, 0.0));
         }
         if let Some(tb) = self.blocks.get_mut(&to) {
             tb.mass += kg_clamped;
@@ -289,7 +311,7 @@ impl Ship {
                     if collected < MIN_BLOCK_MASS {
                         return Err("not enough mass collected to create a block".into());
                     }
-                    self.blocks.insert(cell, Block { material: target_material, mass: collected, energy: 0.0 });
+                    self.blocks.insert(cell, Block::new(target_material, collected, 0.0));
                 } else {
                     self.blocks.get_mut(&cell).unwrap().mass += collected;
                 }
@@ -318,7 +340,7 @@ mod tests {
     #[test]
     fn move_mass_creates_block_and_moves_energy_when_source_empties() {
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Iron, mass: 100.0, energy: 50.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Iron, 100.0, 50.0));
         ship.recompute_com_inertia();
 
         ship.apply_move_mass([0, 0], [1, 0], 100.0).unwrap();
@@ -332,8 +354,8 @@ mod tests {
     #[test]
     fn move_mass_partial_preserves_total_mass_and_leaves_energy_behind() {
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Copper, mass: 200.0, energy: 40.0 });
-        ship.blocks.insert([1, 0], Block { material: Material::Copper, mass: 50.0, energy: 10.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Copper, 200.0, 40.0));
+        ship.blocks.insert([1, 0], Block::new(Material::Copper, 50.0, 10.0));
         ship.recompute_com_inertia();
         let total_before: f32 = ship.blocks.values().map(|b| b.mass).sum();
 
@@ -351,8 +373,8 @@ mod tests {
     #[test]
     fn move_mass_rejects_mismatched_material_and_non_adjacent_target() {
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Iron, mass: 100.0, energy: 0.0 });
-        ship.blocks.insert([5, 5], Block { material: Material::Copper, mass: 100.0, energy: 0.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Iron, 100.0, 0.0));
+        ship.blocks.insert([5, 5], Block::new(Material::Copper, 100.0, 0.0));
         ship.recompute_com_inertia();
 
         assert!(ship.apply_move_mass([0, 0], [5, 5], 10.0).is_err());
@@ -362,7 +384,7 @@ mod tests {
     #[test]
     fn collect_pulls_matching_packets_into_blocks() {
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Iron, mass: 10.0, energy: 0.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Iron, 10.0, 0.0));
         ship.recompute_com_inertia();
         let mut packets = vec![Packet { pos: [0.0, 0.0], vel: [0.0, 0.0], material: Material::Iron, mass: 5.0, age: 0.0 }];
 
@@ -375,7 +397,7 @@ mod tests {
     #[test]
     fn point_velocity_includes_rotation_component() {
         let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block { material: Material::Iron, mass: 100.0, energy: 0.0 });
+        ship.blocks.insert([0, 0], Block::new(Material::Iron, 100.0, 0.0));
         ship.recompute_com_inertia();
         ship.vel = [1.0, 0.0];
         ship.omega = 2.0;

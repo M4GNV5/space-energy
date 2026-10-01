@@ -189,7 +189,11 @@ fn ship_view(s: &Ship) -> ShipView {
         vy: s.vel[1],
         omega: s.omega,
         com: s.com,
-        blocks: s.blocks.iter().map(|(&p, b)| BlockView { p, m: b.material, mass: b.mass, energy: b.energy }).collect(),
+        blocks: s
+            .blocks
+            .iter()
+            .map(|(&p, b)| BlockView { p, m: b.material, mass: b.mass, energy: b.energy, dir: b.dir })
+            .collect(),
     }
 }
 

@@ -1,7 +1,7 @@
 // Canvas 2D rendering. Pure drawing code, no game logic beyond extrapolation.
 
 import { type Camera, localToWorld, worldToScreen } from "./camera";
-import { MATERIALS, type Cell, type ShipId, type ShipView } from "./protocol";
+import { MATERIALS, type BlockView, type Cell, type ShipId, type ShipView } from "./protocol";
 import { extrapolate, type GameState, type Pose } from "./state";
 import { type BuildSelection, type PickResult } from "./ships";
 
@@ -218,6 +218,8 @@ function drawShip(
       ctx.fillStyle = `rgba(255,${g},0,${overlayAlpha})`;
       ctx.fillRect(-half, -half, blockPx, blockPx);
 
+      if (blockPx >= 6) drawControlState(ctx, b, half);
+
       const isSelectedSource = !!source && source.ship === ship.id && source.cell[0] === b.p[0] && source.cell[1] === b.p[1];
       const isHovered = !!hover && hover.ship.id === ship.id && hover.cell[0] === b.p[0] && hover.cell[1] === b.p[1];
 
@@ -241,6 +243,33 @@ function drawShip(
     ctx.textAlign = "center";
     ctx.fillText(`#${ship.id}${isControlled ? " (controlled)" : ""}`, sx, sy - 14);
     ctx.textAlign = "left";
+  }
+}
+
+/** Silicon: arrow along its flow direction, or a cross when off. Block-local, y down. */
+function drawControlState(ctx: CanvasRenderingContext2D, b: BlockView, half: number): void {
+  if (b.m === "silicon") {
+    ctx.strokeStyle = b.dir ? "#ffffff" : "rgba(0,0,0,0.55)";
+    ctx.lineWidth = Math.max(1, half * 0.2);
+    ctx.beginPath();
+    if (!b.dir || b.dir === "all") {
+      // Not conducting: a cross.
+      const d = half * 0.4;
+      ctx.moveTo(-d, -d);
+      ctx.lineTo(d, d);
+      ctx.moveTo(d, -d);
+      ctx.lineTo(-d, d);
+    } else {
+      const [dx, dy] = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] }[b.dir] as [number, number];
+      const l = half * 0.6;
+      const h = half * 0.35;
+      ctx.moveTo(-dx * l, -dy * l);
+      ctx.lineTo(dx * l, dy * l);
+      ctx.moveTo(dx * l - dx * h - dy * h, dy * l - dy * h + dx * h);
+      ctx.lineTo(dx * l, dy * l);
+      ctx.lineTo(dx * l - dx * h + dy * h, dy * l - dy * h - dx * h);
+    }
+    ctx.stroke();
   }
 }
 
