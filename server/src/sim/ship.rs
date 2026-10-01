@@ -423,7 +423,7 @@ mod tests {
         let mut ship = Ship::new(1, None);
         ship.blocks.insert([0, 0], Block::new(Material::Iron, 10.0, 0.0));
         ship.recompute_com_inertia();
-        let mut packets = vec![Packet { pos: [0.0, 0.0], vel: [0.0, 0.0], material: Material::Iron, mass: 5.0, age: 0.0 }];
+        let mut packets = vec![Packet { id: 0, pos: [0.0, 0.0], vel: [0.0, 0.0], material: Material::Iron, mass: 5.0, age: 0.0 }];
 
         ship.apply_collect(&mut packets, None, None).unwrap();
 
@@ -436,7 +436,7 @@ mod tests {
         let mut ship = Ship::new(1, None);
         ship.blocks.insert([0, 0], Block::new(Material::Iron, 10.0, 0.0));
         ship.recompute_com_inertia();
-        let packet = |x: f32| Packet { pos: [x, 0.0], vel: [0.0, 0.0], material: Material::Copper, mass: 5.0, age: 0.0 };
+        let packet = |x: f32| Packet { id: 0, pos: [x, 0.0], vel: [0.0, 0.0], material: Material::Copper, mass: 5.0, age: 0.0 };
         let mut packets = vec![packet(3.0), packet(4.0), packet(500.0)];
 
         ship.apply_collect(&mut packets, None, None).unwrap();
@@ -456,7 +456,7 @@ mod tests {
         ship.blocks.insert([20, 0], Block::new(Material::Copper, 10.0, 0.0));
         ship.recompute_com_inertia();
         let pos = ship.local_to_world([-2.0, 0.0]);
-        let mut packets = vec![Packet { pos, vel: [0.0, 0.0], material: Material::Copper, mass: 5.0, age: 0.0 }];
+        let mut packets = vec![Packet { id: 0, pos, vel: [0.0, 0.0], material: Material::Copper, mass: 5.0, age: 0.0 }];
 
         ship.apply_collect(&mut packets, None, None).unwrap();
 
@@ -474,7 +474,7 @@ mod tests {
             ship.recompute_com_inertia();
             let pos = ship.local_to_world([0.0, 2.0]);
             // Two packets, to check that the result does not depend on how the mass is split.
-            let packet = Packet { pos, vel: [0.0, 0.0], material: Material::Lead, mass: collected / 2.0, age: 0.0 };
+            let packet = Packet { id: 0, pos, vel: [0.0, 0.0], material: Material::Lead, mass: collected / 2.0, age: 0.0 };
             let mut packets = vec![packet, packet];
             ship.apply_collect(&mut packets, None, None).unwrap();
             assert!(packets.is_empty());
@@ -496,7 +496,7 @@ mod tests {
         let mut ship = Ship::new(1, None);
         ship.blocks.insert([0, 0], Block::new(Material::Lead, max - 10.0, 0.0));
         ship.recompute_com_inertia();
-        let mut packets = vec![Packet { pos: [0.0, 2.0], vel: [0.0, 0.0], material: Material::Lead, mass: 60.0, age: 0.0 }];
+        let mut packets = vec![Packet { id: 0, pos: [0.0, 2.0], vel: [0.0, 0.0], material: Material::Lead, mass: 60.0, age: 0.0 }];
 
         ship.apply_collect(&mut packets, None, None).unwrap();
 

@@ -1,11 +1,11 @@
 // Websocket transport + message dispatch. `mock.ts` implements the same
 // `NetLike` interface so the app can run without a server.
 
-import type { ClientMsg, ServerMsg, ShipId, StateMsg } from "./protocol";
+import type { ClientMsg, ServerMsg, ShipId, StateDelta } from "./protocol";
 
 export interface NetHandlers {
   onWelcome: (player: string, ships: ShipId[]) => void;
-  onState: (msg: StateMsg) => void;
+  onState: (msg: StateDelta) => void;
   onError: (msg: string) => void;
   onClose: () => void;
   onOpen?: () => void;
@@ -42,6 +42,8 @@ export class Net implements NetLike {
           this.handlers.onWelcome(msg.player, msg.ships);
           break;
         case "state":
+          // Tells the server this link keeps up; it skips ticks otherwise.
+          this.send({ t: "ack", tick: msg.tick });
           this.handlers.onState(msg);
           break;
         case "error":

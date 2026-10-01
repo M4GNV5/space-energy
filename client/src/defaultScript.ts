@@ -76,7 +76,7 @@ function stabilize() {
 
 /** Shown below the editor. */
 export const API_REFERENCE = `function setup()   runs once when the script starts
-function loop()    runs once per server tick (world.dt seconds)
+function loop()    runs once per server state: every tick (world.dt seconds), less often on a slow connection
 
 ship   (your ship; ship-local grid: +x = e, +y = n = nose)
   .id .x .y .rot .vx .vy .omega .com .mass     world frame, m / rad / kg
@@ -84,7 +84,8 @@ ship   (your ship; ship-local grid: +x = e, +y = n = nose)
   .block(x, y)   block at a cell, or undefined
   .selectedBlock the block of this ship the player clicked, or undefined
   .toLocal(x, y) / .toWorld(x, y)   rotate a vector between world and ship frame
-  .emit(cell, dir, energy = 0, mass = 0)   dir: "n" "e" "s" "w" "all"
+  .emit(cell, dir, energy = 0, mass = 0)   dir: "n" "e" "s" "w" "all"; lasts until the next loop(),
+                 call it in every loop() to keep emitting
   .moveMass(fromCell, toCell, kg)
   .collect(cell?, material?)
 
@@ -92,8 +93,8 @@ world  (everything the camera sees)
   .tick .dt
   .ships         other ships and asteroids (owner null), same fields as ship
   .suns          [{ x, y, radius }]
-  .packets       [{ x, y, vx, vy, m, mass }]
-  .rays          [{ x1, y1, x2, y2, energy, emitted, beam }]
+  .packets       [{ id, x, y, vx, vy, m, mass }]
+  .rays          [{ x1, y1, x2, y2, energy, emitted, beam }]   all player beams, some of the sunlight
 
 menu
   .button(label, onClick)   returns { setLabel(text), setActive(on), remove() }

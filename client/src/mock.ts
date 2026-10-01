@@ -3,7 +3,7 @@
 // server running. Implements the same interface as `Net`.
 
 import type { NetHandlers, NetLike } from "./net";
-import { energyCapacity, type BlockView, type ClientMsg, type Material, type ShipView, type StateMsg } from "./protocol";
+import { energyCapacity, type BlockView, type ClientMsg, type Material, type ShipDelta, type ShipView, type StateDelta } from "./protocol";
 
 const START_BLOCKS: Array<{ p: [number, number]; m: Material; mass: number }> = [
   { p: [-1, 1], m: "lead", mass: 5000 },
@@ -88,16 +88,29 @@ export class MockNet implements NetLike {
       ],
     };
 
-    const msg: StateMsg = {
+    // Everything anew on every tick: simple, and the mock has no bandwidth to save.
+    const msg: StateDelta = {
       tick: Math.round(this.t / 0.04),
-      ships: [ship, asteroid],
+      reset: true,
+      ships: [ship, asteroid].map(shipDelta),
       suns: [{ x: 0, y: 0, radius: 8 }],
       packets: [
-        { x: 25 + Math.sin(this.t) * 2, y: -5, vx: 0, vy: 0, m: "lead", mass: 50 },
-        { x: 27, y: -12, vx: 0, vy: 0, m: "iron", mass: 20 },
+        [1, 25 + Math.sin(this.t) * 2, -5, 0, 0, "lead", 50],
+        [2, 27, -12, 0, 0, "iron", 20],
       ],
-      rays: [{ x1: ship.x, y1: ship.y + 1.5, x2: ship.x, y2: ship.y + 40, energy: 50000, emitted: 50000, beam: true }],
+      rays: [[ship.x, ship.y + 1.5, ship.x, ship.y + 40, 50000, 50000, 1]],
     };
     this.handlers.onState(msg);
   }
+}
+
+function shipDelta(s: ShipView): ShipDelta {
+  return {
+    id: s.id,
+    new: true,
+    owner: s.owner ?? undefined,
+    pose: [s.x, s.y, s.rot, s.vx, s.vy, s.omega],
+    com: s.com,
+    blocks: s.blocks.map((b) => [b.p[0], b.p[1], b.m, b.mass, b.energy, b.dir]),
+  };
 }

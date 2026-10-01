@@ -7,7 +7,7 @@ import { Hud } from "./hud";
 import { InputController } from "./input";
 import { MockNet } from "./mock";
 import { Net, type NetHandlers, type NetLike } from "./net";
-import { energyCapacity, type ShipId, type StateMsg } from "./protocol";
+import { energyCapacity, type ShipId, type StateDelta } from "./protocol";
 import { computePoses, render } from "./render";
 import { ScriptPanel } from "./scriptPanel";
 import { ScriptManager } from "./scripts";
@@ -90,10 +90,10 @@ function startGame(name: string): void {
     onWelcome: (_player, _ships) => {
       hud.setConnectionLost(false, () => {});
     },
-    onState: (msg: StateMsg) => {
+    onState: (msg: StateDelta) => {
       game.apply(msg, performance.now());
       ensureControlledShip();
-      scripts.onState(msg);
+      scripts.onState(game.snapshot());
     },
     onError: (msg) => hud.toast(msg),
     onClose: () => {

@@ -1,8 +1,8 @@
 // Canvas 2D rendering. Pure drawing code, no game logic beyond extrapolation.
 
 import { type Camera, localToWorld, worldToScreen } from "./camera";
-import { MATERIALS, energyCapacity, type BlockView, type Cell, type ShipId, type ShipView } from "./protocol";
-import { extrapolate, type GameState, type Pose } from "./state";
+import { MATERIALS, TICK_S, energyCapacity, type BlockView, type Cell, type ShipId, type ShipView } from "./protocol";
+import { MAX_EXTRAPOLATION_S, extrapolate, type GameState, type Pose } from "./state";
 import { type BuildSelection, type PickResult } from "./ships";
 import { drawSky } from "./sky";
 
@@ -18,8 +18,6 @@ export interface RenderOptions {
 const BLOCK_COLLAPSE_PX = 2;
 /** Ships narrower than this on screen (roughly) get a dot marker. */
 const SHIP_DOT_PX = 6;
-/** Server tick length in seconds. */
-const TICK_S = 0.04;
 
 export function computePoses(game: GameState, now: number): Map<ShipId, Pose> {
   const dt = (now - game.receivedAt) / 1000;
@@ -49,7 +47,9 @@ export function render(
 
   for (const sun of game.suns) drawSun(ctx, cam, cx, cy, sun);
 
-  for (const packet of game.packets) {
+  const packetDt = Math.min(Math.max((now - game.receivedAt) / 1000, 0), MAX_EXTRAPOLATION_S);
+  for (const p of game.packets) {
+    const packet = { ...p, x: p.x + p.vx * packetDt, y: p.y + p.vy * packetDt };
     const [sx, sy] = worldToScreen(cam, cx, cy, packet.x, packet.y);
     const r = Math.max(1.5, Math.min(4, cam.zoom * 0.15));
     // Streak back over the distance travelled in one tick, so the packets of a

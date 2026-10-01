@@ -20,7 +20,8 @@ export interface InputContext {
   scriptPanel: ScriptPanel;
 }
 
-const EMIT_INTERVAL_MS = 40;
+/** Well below the server's emit hold time (EMIT_HOLD_TICKS), so a late resend leaves no gap. */
+const EMIT_INTERVAL_MS = 200;
 const VIEW_THROTTLE_MS = 200;
 
 export class InputController {
@@ -31,7 +32,8 @@ export class InputController {
   private buildTargetCell: Cell | null = null;
 
   private dragging: { button: number; lastX: number; lastY: number; moved: boolean } | null = null;
-  private activeKeys = new Map<string, number>();
+  /** Held bind keys: the resend timer and how to stop what the key started. */
+  private activeKeys = new Map<string, { timer: number; stop: () => void }>();
   private lastSentView: { x: number; y: number; r: number } | null = null;
   private lastViewSentAt = 0;
   private tooltipEl: HTMLDivElement;
@@ -288,9 +290,17 @@ export class InputController {
         });
       }
     };
+    // The server keeps emitting between resends; tell it when the key is released.
+    const stop = () => {
+      const shipId = this.ctx.getControlledShip();
+      if (shipId == null) return;
+      for (const action of bind.actions) {
+        this.net.send({ t: "emit", ship: shipId, block: action.block, dir: action.dir, energy: 0, mass: 0 });
+      }
+    };
     fire();
-    const id = window.setInterval(fire, EMIT_INTERVAL_MS);
-    this.activeKeys.set(key, id);
+    const timer = window.setInterval(fire, EMIT_INTERVAL_MS);
+    this.activeKeys.set(key, { timer, stop });
   }
 
   private onKeyUp(e: KeyboardEvent): void {
@@ -298,16 +308,15 @@ export class InputController {
   }
 
   private stopKey(key: string): void {
-    const id = this.activeKeys.get(key);
-    if (id != null) {
-      clearInterval(id);
-      this.activeKeys.delete(key);
-    }
+    const active = this.activeKeys.get(key);
+    if (!active) return;
+    clearInterval(active.timer);
+    active.stop();
+    this.activeKeys.delete(key);
   }
 
   private stopAllKeys(): void {
-    for (const id of this.activeKeys.values()) clearInterval(id);
-    this.activeKeys.clear();
+    for (const key of [...this.activeKeys.keys()]) this.stopKey(key);
   }
 }
 

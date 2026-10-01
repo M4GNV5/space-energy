@@ -1,6 +1,6 @@
 //! World state and the per-tick simulation step.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::Rng;
 use rand::SeedableRng;
@@ -14,6 +14,8 @@ use crate::sim::worldgen;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Packet {
+    /// Unique for as long as the server runs; 0 until the packet's first tick is over.
+    pub id: u64,
     pub pos: [f32; 2],
     pub vel: [f32; 2],
     pub material: Material,
@@ -47,11 +49,22 @@ pub struct World {
     pub sun_cache: HashMap<(i32, i32), Option<Sun>>,
     /// Commands queued by the network layer, applied at the next tick.
     pub pending: Vec<(String, Command)>,
-    emit_queue: Vec<(ShipId, Cell, Dir, f32, f32)>,
+    /// Emissions that repeat every tick until replaced, stopped or timed out.
+    /// Ordered, so that a tick does not depend on hash order.
+    held: BTreeMap<(ShipId, Cell, Dir), HeldEmit>,
+    next_packet_id: u64,
     /// Ships whose thrust increased their speed this tick; they are not braked.
     accelerating: HashSet<ShipId>,
     /// (player, message) pairs produced by failed commands this tick.
     pub errors: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HeldEmit {
+    energy: f32,
+    mass: f32,
+    /// Ticks left before the emission ends by itself.
+    ttl: u32,
 }
 
 /// Max distance a ray can travel before falloff drops below `MIN_FALLOFF`.
@@ -126,7 +139,8 @@ impl World {
             rays: Vec::new(),
             sun_cache: HashMap::new(),
             pending: Vec::new(),
-            emit_queue: Vec::new(),
+            held: BTreeMap::new(),
+            next_packet_id: 1,
             accelerating: HashSet::new(),
             errors: Vec::new(),
         }
@@ -250,7 +264,12 @@ impl World {
                     }
                 }
                 Command::Emit { ship, block, dir, energy, mass } => {
-                    self.emit_queue.push((ship, block, dir, energy, mass));
+                    if energy > 0.0 || mass > 0.0 {
+                        self.held.insert((ship, block, dir), HeldEmit { energy, mass, ttl: consts::EMIT_HOLD_TICKS });
+                    } else if let Some(h) = self.held.get_mut(&(ship, block, dir)) {
+                        // A stop. An emission that has not had its tick yet still gets it.
+                        h.ttl = if h.ttl == consts::EMIT_HOLD_TICKS { 1 } else { 0 };
+                    }
                 }
             }
         }
@@ -345,7 +364,7 @@ impl World {
                             point_vel[0] + world_dir[0] * exhaust_speed,
                             point_vel[1] + world_dir[1] * exhaust_speed,
                         ];
-                        self.packets.push(Packet { pos: world_point, vel, material, mass: per, age: 0.0 });
+                        self.packets.push(Packet { id: 0, pos: world_point, vel, material, mass: per, age: 0.0 });
                     }
                 }
                 _ => {
@@ -355,7 +374,7 @@ impl World {
                         point_vel[0] + world_dir[0] * exhaust_speed,
                         point_vel[1] + world_dir[1] * exhaust_speed,
                     ];
-                    self.packets.push(Packet { pos: world_point, vel, material, mass: mass_amt, age: 0.0 });
+                    self.packets.push(Packet { id: 0, pos: world_point, vel, material, mass: mass_amt, age: 0.0 });
                     let impulse = [-mass_amt * exhaust_speed * world_dir[0], -mass_amt * exhaust_speed * world_dir[1]];
                     if let Some(ship) = self.ships.get_mut(&ship_id) {
                         ship.apply_impulse(world_point, impulse);
@@ -524,6 +543,7 @@ impl World {
             let dirs = if e.material == Material::Rock { Vec::new() } else { dirs };
             for d in &dirs {
                 self.packets.push(Packet {
+                    id: 0,
                     pos: e.world_point,
                     vel: [e.ship_vel[0] + d[0] * consts::BURST_SPEED, e.ship_vel[1] + d[1] * consts::BURST_SPEED],
                     material: e.material,
@@ -560,6 +580,10 @@ impl World {
             p.pos[0] += p.vel[0] * consts::DT;
             p.pos[1] += p.vel[1] * consts::DT;
             p.age += consts::DT;
+            if p.id == 0 {
+                p.id = self.next_packet_id;
+                self.next_packet_id += 1;
+            }
         }
         self.packets.retain(|p| p.age < consts::PACKET_TTL);
     }
@@ -613,7 +637,10 @@ impl World {
         self.apply_pending();
         self.apply_uranium();
         let suns = self.compute_active_suns();
-        let emit_queue = std::mem::take(&mut self.emit_queue);
+        self.held.retain(|_, h| h.ttl > 0);
+        let emit_queue: Vec<(ShipId, Cell, Dir, f32, f32)> =
+            self.held.iter().map(|(&(ship, block, dir), h)| (ship, block, dir, h.energy, h.mass)).collect();
+        self.held.values_mut().for_each(|h| h.ttl -= 1);
         let speed_of = |ships: &HashMap<ShipId, Ship>, id: &ShipId| ships.get(id).map(|s| s.vel[0].hypot(s.vel[1]));
         let speeds_before: HashMap<ShipId, f32> =
             emit_queue.iter().filter_map(|(id, ..)| Some((*id, speed_of(&self.ships, id)?))).collect();
@@ -1051,6 +1078,10 @@ mod tests {
         w.step();
     }
 
+    fn stop_thrust(w: &mut World, dir: Dir) {
+        w.queue_command("p".into(), Command::Emit { ship: 1, block: [0, 0], dir, energy: 0.0, mass: 0.0 });
+    }
+
     #[test]
     fn brake_is_off_while_speeding_up_and_on_while_slowing_down() {
         // Emitting west pushes the ship east. One tick of thrust changes the speed by 1 m/s.
@@ -1075,7 +1106,34 @@ mod tests {
         let mut w = World::new(1);
         moving_ship(&mut w);
         step_with_thrust(&mut w, Dir::W);
+        stop_thrust(&mut w, Dir::W);
         w.step();
         approx(w.ships[&1].vel[0], 21.0 - brake, 0.01);
+    }
+
+    #[test]
+    fn emit_repeats_until_it_times_out() {
+        let mut w = World::new(1);
+        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 0.0);
+        step_with_thrust(&mut w, Dir::W);
+        for _ in 0..consts::EMIT_HOLD_TICKS + 5 {
+            w.step();
+        }
+        // 1 kg per tick, for exactly the hold time.
+        approx(w.ships[&1].blocks[&[0, 0]].mass, 1000.0 - consts::EMIT_HOLD_TICKS as f32, 1e-3);
+    }
+
+    #[test]
+    fn repeated_emits_do_not_stack_and_a_stop_still_leaves_one_tick() {
+        let mut w = World::new(1);
+        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 0.0);
+        // Everything arrives within one tick: two emits and the stop.
+        for mass in [1.0, 1.0, 0.0] {
+            w.queue_command("p".into(), Command::Emit { ship: 1, block: [0, 0], dir: Dir::W, energy: 0.0, mass });
+        }
+        for _ in 0..5 {
+            w.step();
+        }
+        approx(w.ships[&1].blocks[&[0, 0]].mass, 999.0, 1e-3);
     }
 }

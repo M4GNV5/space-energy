@@ -37,18 +37,22 @@ Client → server:
 {"t":"move_mass","ship":1,"from":[0,0],"to":[1,0],"kg":10}
 {"t":"emit","ship":1,"block":[0,1],"dir":"n|e|s|w|all","energy":100,"mass":0}
 {"t":"collect","ship":1,"block":[0,-1],"material":"lead"}
+{"t":"ack","tick":123}
 ```
-- `emit` is a one-shot for one tick. The client resends it every tick while the key is held.
+- `emit` repeats every tick until a new `emit` for the same block and direction replaces it, until it is stopped (`energy` 0 and `mass` 0), or until 12 ticks pass (`EMIT_HOLD_TICKS`). The client resends it every 200 ms while the key is held and stops it on release. So thrust stays even when commands arrive late or in bursts.
+- `ack` answers every `state`. The server lets at most 8 states go unanswered; after that it skips ticks for this client instead of queueing them, so a slow connection gets fewer but current states.
 - `collect` needs `material` only when `block` is an empty cell.
 
 Server → client:
 ```json
 {"t":"welcome","player":"jakob","ships":[1]}
-{"t":"state","tick":123,"ships":[...],"packets":[...],"rays":[...]}
+{"t":"state","tick":123,"ships":[{"id":1,"pose":[x,y,rot,vx,vy,omega],"blocks":[[0,1,"iron",300,5000]]}],"packets":[...],"rays":[...]}
 {"t":"error","msg":"..."}
 ```
-- `state` is sent every tick and contains everything within the client's `view` radius.
-- `rays` are only for drawing beams.
+- `state` is sent every tick and covers the client's `view` radius, but only holds what changed since the last one (see `StateDelta` in `protocol.rs`). The first one has `reset: true` and is complete.
+  - A ship's `pose` is left out while the ship just keeps moving by its last velocity. Blocks are sent when new, when their mass changes, or when their energy is off by 1 % of the capacity.
+  - Packets fly straight: they are sent once, the client moves them.
+- `rays` are only for drawing: all player beams, and one in four of the other rays that hit something.
 
 ## Starting Ship (tune in M7)
 

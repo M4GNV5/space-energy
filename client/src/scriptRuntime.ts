@@ -15,10 +15,9 @@ import {
   type ShipId,
   type ShipView,
   type StateMsg,
+  TICK_S,
 } from "./protocol";
 
-/** Seconds per server tick. Keep in sync with `TICK_RATE` in server/src/sim/consts.rs. */
-export const TICK_DT = 1 / 25;
 /** Commands a script may issue per tick; the rest is dropped. */
 export const MAX_CMDS_PER_TICK = 256;
 const MAX_LOGS_PER_TICK = 50;
@@ -99,6 +98,10 @@ export class ScriptRuntime {
   private menuDirty = false;
   private nextButtonId = 1;
   private dead = false;
+  /** Emits (block + dir) issued since the last `loop()` ended. */
+  private emitted = new Map<string, { block: Cell; dir: Dir }>();
+  /** Emits the server is still repeating, as far as we know. */
+  private held = new Map<string, { block: Cell; dir: Dir }>();
 
   // Stable objects, updated in place every tick, so scripts may keep references.
   private ship: Record<string, unknown>;
@@ -121,14 +124,16 @@ export class ScriptRuntime {
       toWorld: (x: number, y: number) => rotate(x, y, this.ship.rot as number),
       emit: (block: unknown, dir: unknown, energy: unknown = 0, mass: unknown = 0) => {
         if (!DIRS.includes(dir as Dir)) throw new TypeError(`dir must be one of ${DIRS.join(", ")}, got ${fmt(dir)}`);
-        push({
+        const cmd: ScriptCmd = {
           t: "emit",
           ship: shipId,
           block: cell(block, "block"),
           dir: dir as Dir,
           energy: amount(energy, "energy"),
           mass: amount(mass, "mass"),
-        });
+        };
+        push(cmd);
+        this.emitted.set(`${cmd.block}:${cmd.dir}`, cmd);
       },
       moveMass: (from: unknown, to: unknown, kg: unknown) => {
         push({ t: "move_mass", ship: shipId, from: cell(from, "from"), to: cell(to, "to"), kg: amount(kg, "kg") });
@@ -142,7 +147,7 @@ export class ScriptRuntime {
       },
     };
 
-    this.world = { tick: 0, dt: TICK_DT, ships: [], suns: [], packets: [], rays: [] };
+    this.world = { tick: 0, dt: TICK_S, ships: [], suns: [], packets: [], rays: [] };
 
     this.menu = {
       button: (label: unknown, onClick: unknown) => {
@@ -210,7 +215,27 @@ export class ScriptRuntime {
   /** Run `loop()` for a new server state. Does nothing while the ship is out of view. */
   tick(state: StateMsg, selected: Cell | null = null): ScriptResult {
     if (this.dead || !this.loopFn || !this.update(state, selected)) return this.flush(null);
-    return this.call("loop", this.loopFn);
+    const loop = this.loopFn;
+    return this.call("loop", () => {
+      // Emits from `setup()` and button clicks last until this loop, too.
+      for (const [key, emit] of this.emitted) this.held.set(key, emit);
+      this.emitted.clear();
+      loop();
+      this.stopEndedEmits();
+    });
+  }
+
+  /**
+   * The server repeats an emit by itself for a while, to bridge a slow
+   * connection. For a script an emit still means "this tick": whatever
+   * `loop()` did not emit again is stopped.
+   */
+  private stopEndedEmits(): void {
+    for (const [key, { block, dir }] of this.held) {
+      if (!this.emitted.has(key)) this.cmds.push({ t: "emit", ship: this.shipId, block, dir, energy: 0, mass: 0 });
+    }
+    this.held = this.emitted;
+    this.emitted = new Map();
   }
 
   click(id: number, selected: Cell | null = null): ScriptResult {

@@ -148,7 +148,18 @@ check("default script: stabilize thrusts against motion and spin", () => {
   assert.equal(res.error, null);
   const emits = res.cmds.map((c) => (c.t === "emit" ? `${c.block}:${c.dir}` : c.t));
   assert.deepEqual(emits, ["-2,4:n", "2,4:n", "-2,4:w", "2,-3:e"]);
-  assert.deepEqual(rt.tick(state()).cmds, [], "nothing to do at rest");
+  // The server would keep repeating the emits by itself: the script stops what it no longer wants.
+  const stops = rt.tick(state()).cmds.map((c) => (c.t === "emit" ? `${c.block}:${c.dir}:${c.energy}:${c.mass}` : c.t));
+  assert.deepEqual(stops, ["-2,4:n:0:0", "2,4:n:0:0", "-2,4:w:0:0", "2,-3:e:0:0"], "at rest: stop all thrusters");
+  assert.deepEqual(rt.tick(state()).cmds, [], "stops are sent once");
+});
+
+check("an emit from a button click lasts until the next loop", () => {
+  const rt = new ScriptRuntime(7);
+  rt.start(`function setup() { menu.button("fire", () => ship.emit([0, 0], "n", 100)); } function loop() {}`, state());
+  assert.equal(rt.click(1).cmds.length, 1);
+  assert.deepEqual(rt.tick(state()).cmds, [{ t: "emit", ship: 7, block: [0, 0], dir: "n", energy: 0, mass: 0 }]);
+  assert.deepEqual(rt.tick(state()).cmds, []);
 });
 
 console.log(`\n${passed} checks passed`);

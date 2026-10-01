@@ -130,6 +130,10 @@ pub const MIN_FALLOFF: f32 = 0.01;
 /// Number of rays for an omni-directional emission (random angular offset per tick).
 pub const OMNI_RAYS: usize = 16;
 
+/// An emit command repeats for this many ticks unless a new one for the same
+/// block and direction replaces or stops it. Bridges the gaps of a slow or jittery connection.
+pub const EMIT_HOLD_TICKS: u32 = 12;
+
 // --- Mass emission ---
 /// Exhaust speed (m/s) per J of energy emitted together with the mass, relative
 /// to the emitting block. Thrust impulse = mass × energy × this.

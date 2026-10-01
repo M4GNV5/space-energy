@@ -118,7 +118,8 @@ The browser-based frontend should:
 
 ### Scripts
 Each ship can have one script (JavaScript), written in the in-game editor (`R`). Scripts run in the browser of the owning player, not on the server: a script only runs while its owner is connected, and it issues the same commands a player could send by hand.
-- A script defines `setup()` (runs once at start) and `loop()` (runs once per server tick).
+- A script defines `setup()` (runs once at start) and `loop()` (runs once per server state: every tick, less often on a slow connection).
+- An emit lasts until the next `loop()`: a script that wants to keep emitting calls `ship.emit` in every loop. The server keeps the emission going between loops.
 - It sees its own ship (`ship`: pose, velocity, blocks) and the nearby universe (`world`: other ships and asteroids, suns, packets, rays). "Nearby" is what the server sends to the client, i.e. what the camera sees. While the ship itself is out of view, its `loop()` is paused.
 - `ship.selectedBlock` is the block of the ship the player has clicked (the build-mode source block), or `undefined`.
 - Commands: `ship.emit(cell, dir, energy, mass)`, `ship.moveMass(from, to, kg)`, `ship.collect(cell?, material?)`.

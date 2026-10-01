@@ -1,7 +1,7 @@
 //! Websocket networking: connections, players, login, command validation,
 //! and per-tick state snapshots.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,8 +9,9 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
+use crate::delta::DeltaEncoder;
 use crate::protocol::{
     BlockView, ClientMsg, PacketView, RayView, ServerMsg, ShipId, ShipView, StateMsg, SunView,
 };
@@ -18,10 +19,21 @@ use crate::sim::consts::MAX_VIEW_RADIUS;
 use crate::sim::ship::{dist, Ship};
 use crate::sim::world::{Command, World};
 
+/// A connection may have this many `state` messages on the way that it has not
+/// acknowledged. Beyond that, ticks are skipped instead of piling up behind a
+/// slow link.
+const MAX_UNACKED_STATES: usize = 8;
+/// A connection that acknowledges nothing still gets a `state` this often.
+const ACK_TIMEOUT: Duration = Duration::from_secs(1);
+
 struct Conn {
     name: Option<String>,
     view: (f32, f32, f32),
     tx: mpsc::UnboundedSender<ServerMsg>,
+    /// The newest view. The writer task sends it as a delta when the link has room.
+    state: watch::Sender<Option<Arc<StateMsg>>>,
+    /// Tick of the newest `state` the client has acknowledged.
+    acked: watch::Sender<u64>,
 }
 
 /// Everything behind one lock: the simulation plus connection/player bookkeeping.
@@ -72,17 +84,44 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(server): State<SharedServer>
 async fn handle_socket(socket: WebSocket, server: SharedServer) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
+    let (state, mut state_rx) = watch::channel(None);
+    let (acked, mut acked_rx) = watch::channel(0);
 
     let conn_id = {
         let mut s = server.lock().unwrap();
         let id = s.next_conn_id;
         s.next_conn_id += 1;
-        s.connections.insert(id, Conn { name: None, view: (0.0, 0.0, 1000.0), tx: tx.clone() });
+        s.connections.insert(id, Conn { name: None, view: (0.0, 0.0, 1000.0), tx: tx.clone(), state, acked });
         id
     };
 
     let writer = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
+        let mut encoder = DeltaEncoder::default();
+        // Ticks of the states sent but not acknowledged yet.
+        let mut unacked: VecDeque<u64> = VecDeque::new();
+        loop {
+            let acked = *acked_rx.borrow_and_update();
+            while unacked.front().is_some_and(|&tick| tick <= acked) {
+                unacked.pop_front();
+            }
+            let has_room = unacked.len() < MAX_UNACKED_STATES;
+            let msg = tokio::select! {
+                biased;
+                msg = rx.recv() => match msg {
+                    Some(msg) => msg,
+                    None => break,
+                },
+                Ok(()) = acked_rx.changed() => continue,
+                Ok(()) = state_rx.changed(), if has_room => {
+                    let Some(snapshot) = state_rx.borrow_and_update().clone() else { continue };
+                    unacked.push_back(snapshot.tick);
+                    ServerMsg::State(encoder.encode(&snapshot))
+                }
+                _ = tokio::time::sleep(ACK_TIMEOUT), if !has_room => {
+                    unacked.pop_front();
+                    continue;
+                }
+            };
             let text = serde_json::to_string(&msg).unwrap_or_default();
             if ws_tx.send(Message::Text(text.into())).await.is_err() {
                 break;
@@ -145,9 +184,9 @@ fn handle_client_msg(server: &SharedServer, conn_id: u64, text: &str) {
             if let Some(conn) = s.connections.get_mut(&conn_id) {
                 conn.name = Some(name.clone());
                 conn.view = (center.0, center.1, 1000.0);
+                // Sent under the lock, so that no state can get ahead of it.
+                let _ = conn.tx.send(ServerMsg::Welcome { player: name, ships });
             }
-            drop(s);
-            send_to(server, conn_id, ServerMsg::Welcome { player: name, ships });
         }
         ClientMsg::View { x, y, r } => {
             let Some(_name) = current_name else {
@@ -184,6 +223,11 @@ fn handle_client_msg(server: &SharedServer, conn_id: u64, text: &str) {
                 return;
             }
             s.world.queue_command(name, Command::Emit { ship, block, dir, energy, mass });
+        }
+        ClientMsg::Ack { tick } => {
+            if let Some(conn) = s.connections.get(&conn_id) {
+                conn.acked.send_replace(tick);
+            }
         }
         ClientMsg::Collect { ship, block, material } => {
             let Some(name) = current_name else {
@@ -255,18 +299,20 @@ pub async fn run_game_loop(server: SharedServer) {
                 .packets
                 .iter()
                 .filter(|p| dist(p.pos, center) <= r)
-                .map(|p| PacketView { x: p.pos[0], y: p.pos[1], vx: p.vel[0], vy: p.vel[1], m: p.material, mass: p.mass })
+                .map(|p| PacketView { id: p.id, x: p.pos[0], y: p.pos[1], vx: p.vel[0], vy: p.vel[1], m: p.material, mass: p.mass })
                 .collect();
             let rays: Vec<RayView> = s
                 .world
                 .rays
                 .iter()
+                // Sunlight that hits nothing is not drawn, and there is a lot of it.
+                .filter(|ray| ray.beam || ray.energy > 0.0)
                 .filter(|ray| dist([ray.x1, ray.y1], center) <= r || dist([ray.x2, ray.y2], center) <= r)
                 .cloned()
                 .collect();
-            let state = ServerMsg::State(StateMsg { tick, ships, suns, packets, rays });
+            let state = Arc::new(StateMsg { tick, ships, suns, packets, rays });
             match s.connections.get(&id) {
-                Some(conn) if conn.tx.send(state).is_ok() => {}
+                Some(conn) if conn.state.send(Some(state)).is_ok() => {}
                 _ => dead.push(id),
             }
         }
@@ -282,7 +328,8 @@ mod tests {
 
     fn connect(s: &mut Server, conn_id: u64, name: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
-        s.connections.insert(conn_id, Conn { name: Some(name.into()), view: (0.0, 0.0, 1000.0), tx });
+        let (state, acked) = (watch::channel(None).0, watch::channel(0).0);
+        s.connections.insert(conn_id, Conn { name: Some(name.into()), view: (0.0, 0.0, 1000.0), tx, state, acked });
         s.unpark(name);
     }
 

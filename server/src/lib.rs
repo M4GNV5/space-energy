@@ -1,3 +1,4 @@
+pub mod delta;
 pub mod net;
 pub mod protocol;
 pub mod save;
