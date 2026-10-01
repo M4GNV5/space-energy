@@ -4,6 +4,7 @@ import { type Camera, localToWorld, worldToScreen } from "./camera";
 import { MATERIALS, energyCapacity, type BlockView, type Cell, type ShipId, type ShipView } from "./protocol";
 import { extrapolate, type GameState, type Pose } from "./state";
 import { type BuildSelection, type PickResult } from "./ships";
+import { drawSky } from "./sky";
 
 export interface RenderOptions {
   ownerName: string;
@@ -15,6 +16,8 @@ export interface RenderOptions {
 }
 
 const BLOCK_COLLAPSE_PX = 2;
+/** Ships narrower than this on screen (roughly) get a dot marker. */
+const SHIP_DOT_PX = 6;
 /** Server tick length in seconds. */
 const TICK_S = 0.04;
 
@@ -37,6 +40,7 @@ export function render(
 ): void {
   ctx.fillStyle = "#05060a";
   ctx.fillRect(0, 0, width, height);
+  drawSky(ctx, cam, width, height);
 
   const cx = width / 2;
   const cy = height / 2;
@@ -190,11 +194,25 @@ function drawShip(
   const [sx, sy] = worldToScreen(cam, cx, cy, pose.x, pose.y);
 
   if (blockPx < BLOCK_COLLAPSE_PX) {
-    const dotColor = isOwn ? "#4ddfff" : ship.owner ? "#ff9a4d" : "#888";
-    ctx.fillStyle = dotColor;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 3, 0, Math.PI * 2);
-    ctx.fill();
+    // Too small for outlines and overlays: plain material colours, one transform per ship.
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(-pose.rot);
+    // Slightly oversized, so sub-pixel blocks do not leave seams.
+    const size = blockPx + 0.5;
+    for (const b of ship.blocks) {
+      ctx.fillStyle = MATERIALS[b.m].color;
+      ctx.fillRect((b.p[0] - ship.com[0]) * blockPx - size / 2, -(b.p[1] - ship.com[1]) * blockPx - size / 2, size, size);
+    }
+    ctx.restore();
+    // A ship that small would vanish, so mark it with a dot as well.
+    if (Math.sqrt(ship.blocks.length) * blockPx < SHIP_DOT_PX) {
+      const dotColor = isOwn ? "#4ddfff" : ship.owner ? "#ff9a4d" : "#888";
+      ctx.fillStyle = dotColor;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
   } else {
     for (const b of ship.blocks) {
       const [wx, wy] = localToWorld(pose.x, pose.y, pose.rot, ship.com, b.p);

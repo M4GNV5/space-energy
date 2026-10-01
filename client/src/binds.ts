@@ -22,29 +22,29 @@ export const DEFAULT_BINDS: Bind[] = [
   {
     // Forward: the five main engines.
     key: "w",
-    actions: [-2, -1, 0, 1, 2].map((x): BindAction => ({ block: [x, -3], dir: "s", energy: 0, mass: 1.5 })),
+    actions: [-2, -1, 0, 1, 2].map((x): BindAction => ({ block: [x, -3], dir: "s", energy: 2000, mass: 1.5 })),
   },
   {
     // Brake / reverse: the two front thrusters.
     key: "s",
     actions: [
-      { block: [-2, 4], dir: "n", energy: 0, mass: 2 },
-      { block: [2, 4], dir: "n", energy: 0, mass: 2 },
+      { block: [-2, 4], dir: "n", energy: 2000, mass: 2 },
+      { block: [2, 4], dir: "n", energy: 2000, mass: 2 },
     ],
   },
   {
     // Turn left: front-right thruster pushes the nose left, rear-left engine pushes the tail right.
     key: "a",
     actions: [
-      { block: [2, 4], dir: "e", energy: 0, mass: 2 },
-      { block: [-2, -3], dir: "w", energy: 0, mass: 2 },
+      { block: [2, 4], dir: "e", energy: 2000, mass: 2 },
+      { block: [-2, -3], dir: "w", energy: 2000, mass: 2 },
     ],
   },
   {
     key: "d",
     actions: [
-      { block: [-2, 4], dir: "w", energy: 0, mass: 2 },
-      { block: [2, -3], dir: "e", energy: 0, mass: 2 },
+      { block: [-2, 4], dir: "w", energy: 2000, mass: 2 },
+      { block: [2, -3], dir: "e", energy: 2000, mass: 2 },
     ],
   },
   {
@@ -68,8 +68,8 @@ export const DEFAULT_BINDS: Bind[] = [
   { key: "4", actions: [{ block: [0, 0], dir: "all", energy: 1, mass: 0 }] },
 ];
 
-// Bump the version when the starter ship layout changes, so stale binds are dropped.
-const STORAGE_KEY = "space-energy-binds-v2";
+// Bump the version when the starter ship layout or the emit rules change, so stale binds are dropped.
+const STORAGE_KEY = "space-energy-binds-v3";
 
 function cloneDefaults(): Bind[] {
   return JSON.parse(JSON.stringify(DEFAULT_BINDS)) as Bind[];
