@@ -1,5 +1,5 @@
 //! All balancing values. Units: m, kg, s, J. "per tick" = 1/TICK_RATE s.
-//! Material max mass / energy capacity are mirrored in `client/src/protocol.ts`.
+//! Material max mass / energy per kg are mirrored in `client/src/protocol.ts`.
 
 use crate::protocol::Material;
 
@@ -9,11 +9,15 @@ pub const DT: f32 = 1.0 / TICK_RATE as f32;
 pub struct MaterialProps {
     /// kg per block (a block is 1 m³, so this is roughly the density)
     pub max_mass: f32,
-    /// J; exceeding it bursts the block
-    pub energy_capacity: f32,
-    /// Fraction of the fill-ratio difference equalised per tick with a neighbour
-    /// (pair uses the min of both). Must stay <= 0.25 for stability.
+    /// J per kg of block mass. A block's capacity is this times its mass;
+    /// exceeding it bursts the block.
+    pub energy_per_kg: f32,
+    /// Fraction of the fill-ratio difference equalised per tick with a neighbour.
+    /// A pair uses the max of both (a good conductor pulls energy through a poor
+    /// one), unless one of them is an isolator. Must stay <= 0.25 for stability.
     pub conductance: f32,
+    /// A pair with an isolator uses the min of both conductances instead.
+    pub isolator: bool,
     /// Max energy emitted per tick (J)
     pub energy_emit_rate: f32,
     /// Max mass emitted per tick (kg)
@@ -34,51 +38,58 @@ pub fn props(m: Material) -> &'static MaterialProps {
 
 const IRON: MaterialProps = MaterialProps {
     max_mass: 7900.0,
-    energy_capacity: 2.0e6,
+    energy_per_kg: 6500.0,
     conductance: 0.15,
+    isolator: false,
     energy_emit_rate: 100_000.0,
     mass_emit_rate: 1.0,
 };
 const COPPER: MaterialProps = MaterialProps {
     max_mass: 8900.0,
-    energy_capacity: 1.5e6,
+    energy_per_kg: 5000.0,
     conductance: 0.25,
+    isolator: false,
     energy_emit_rate: 5_000.0,
     mass_emit_rate: 1.0,
 };
 const LEAD: MaterialProps = MaterialProps {
     max_mass: 11300.0,
-    energy_capacity: 1.0e6,
+    energy_per_kg: 250.0,
     conductance: 0.05,
+    isolator: false,
     energy_emit_rate: 5_000.0,
     mass_emit_rate: 2.0,
 };
 const PLASTIC: MaterialProps = MaterialProps {
     max_mass: 1200.0,
-    energy_capacity: 0.5e6,
+    energy_per_kg: 5000.0,
     conductance: 0.002,
+    isolator: true,
     energy_emit_rate: 1_000.0,
     mass_emit_rate: 1.0,
 };
 const TUNGSTEN: MaterialProps = MaterialProps {
     max_mass: 19300.0,
-    energy_capacity: 2.0e7,
+    energy_per_kg: 13000.0,
     conductance: 0.1,
+    isolator: false,
     energy_emit_rate: 10_000.0,
     mass_emit_rate: 1.0,
 };
 const URANIUM: MaterialProps = MaterialProps {
     max_mass: 19000.0,
-    energy_capacity: 4.0e6,
+    energy_per_kg: 4000.0,
     conductance: 0.08,
+    isolator: false,
     energy_emit_rate: 5_000.0,
     mass_emit_rate: 1.0,
 };
 /// One-way conductor: `conductance` applies only along its direction, otherwise 0.
 const SILICON: MaterialProps = MaterialProps {
     max_mass: 2330.0,
-    energy_capacity: 1.0e6,
+    energy_per_kg: 5000.0,
     conductance: 0.2,
+    isolator: false,
     energy_emit_rate: 1_000.0,
     mass_emit_rate: 1.0,
 };
@@ -120,8 +131,9 @@ pub const URANIUM_KG_PER_TICK: f32 = 0.0016;
 pub const URANIUM_J_PER_KG: f32 = 5.0e6;
 
 // --- Movement helper (temporary until player scripting) ---
-/// Fraction of linear velocity lost per tick.
-pub const LINEAR_DAMPING: f32 = 0.005;
+/// Deceleration (m/s²) of every ship that is not speeding up under its own
+/// thrust this tick. The same at any speed, down to a full stop.
+pub const LINEAR_BRAKE: f32 = 2.0;
 /// Fraction of angular velocity lost per tick.
 pub const ANGULAR_DAMPING: f32 = 0.02;
 
@@ -129,20 +141,31 @@ pub const ANGULAR_DAMPING: f32 = 0.02;
 pub const CHUNK_SIZE: f32 = 1000.0;
 /// Probability that a chunk contains a sun (chunk 0,0 always has one).
 pub const SUN_CHANCE: f64 = 0.3;
-pub const SUN_RADIUS_MIN: f32 = 10.0;
-pub const SUN_RADIUS_MAX: f32 = 30.0;
-/// Energy emitted by a sun per tick (J), split across SUN_RAYS rays.
-pub const SUN_POWER: f32 = 2.0e6;
-pub const SUN_RAYS: usize = 64;
+pub const SUN_RADIUS_MIN: f32 = 100.0;
+pub const SUN_RADIUS_MAX: f32 = 300.0;
+/// Energy emitted by a sun per tick, per metre of its radius (J/m), split across
+/// SUN_RAYS rays. Scaling with the radius keeps the sunlight a ship receives at a
+/// given distance from the surface roughly independent of the sun's size.
+pub const SUN_POWER_PER_M: f32 = 2.0e4;
+pub const SUN_RAYS: usize = 128;
 /// Starting ships spawn this far from the nearest sun's surface (m).
 pub const SPAWN_SUN_DISTANCE: f32 = 200.0;
 
 pub const ASTEROIDS_PER_PLAYER: usize = 12;
-pub const ASTEROID_SPAWN_MIN: f32 = 150.0;
-pub const ASTEROID_SPAWN_MAX: f32 = 600.0;
-pub const ASTEROID_DESPAWN: f32 = 1500.0;
-pub const ASTEROID_BLOCKS_MIN: usize = 3;
-pub const ASTEROID_BLOCKS_MAX: usize = 15;
+pub const ASTEROID_SPAWN_MIN: f32 = 200.0;
+pub const ASTEROID_SPAWN_MAX: f32 = 900.0;
+pub const ASTEROID_DESPAWN: f32 = 1800.0;
+pub const ASTEROID_BLOCKS_MIN: usize = 40;
+pub const ASTEROID_BLOCKS_MAX: usize = 300;
+/// Asteroid blocks spawn with a random fraction of their material's max mass
+/// in this range. Kept low so their energy capacity stays laser-sized.
+pub const ASTEROID_MASS_FRAC_MIN: f32 = 0.02;
+pub const ASTEROID_MASS_FRAC_MAX: f32 = 0.15;
+/// Chance that a new asteroid block copies the material of the block it grew
+/// from, which makes materials form veins instead of noise.
+pub const ASTEROID_VEIN_CHANCE: f64 = 0.85;
+/// Asteroids do not spawn closer than this to a sun's surface (m).
+pub const ASTEROID_SUN_MARGIN: f32 = 50.0;
 pub const ASTEROID_SPEED_MAX: f32 = 2.0;
 /// Max angular speed of a freshly spawned asteroid (rad/s). Added for M3.
 pub const ASTEROID_SPIN_MAX: f32 = 0.3;
@@ -150,6 +173,9 @@ pub const ASTEROID_SPIN_MAX: f32 = 0.3;
 /// does not burst asteroids. A flat rate: it cancels weak sunlight but an
 /// N-block asteroid only shrugs off N times this much laser power.
 pub const ASTEROID_COOLING: f32 = 200.0;
+/// Fraction of sunlight an asteroid block absorbs (rock reflects the rest), so
+/// asteroids near a sun do not burst. Lasers and bursts are not reduced.
+pub const ASTEROID_SUN_ABSORPTION: f32 = 0.01;
 /// Conduction inside asteroids is scaled by this (loose rock conducts badly),
 /// so laser heat stays near the block that was hit instead of spreading out.
 pub const ASTEROID_CONDUCTION: f32 = 0.1;
@@ -162,4 +188,4 @@ pub const MAX_VIEW_RADIUS: f32 = 3000.0;
 pub const SPAWN_NEAR_ORIGIN_RADIUS: f32 = 50.0;
 /// Extra random jitter added to a starter ship's distance from its sun, so
 /// players spawning at the same time don't overlap exactly.
-pub const SPAWN_JITTER: f32 = 30.0;
+pub const SPAWN_JITTER: f32 = 80.0;

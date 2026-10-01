@@ -5,7 +5,7 @@ import type { Bind } from "./binds";
 import { escapeHtml, formatEnergy, formatMass } from "./format";
 import type { Hud } from "./hud";
 import type { NetLike } from "./net";
-import { MATERIALS, type Cell, type ShipId } from "./protocol";
+import { MATERIALS, energyCapacity, type Cell, type ShipId } from "./protocol";
 import type { GameState } from "./state";
 import { type BuildSelection, type PickResult, localCellForShip, pickShipAt } from "./ships";
 import { computePoses } from "./render";
@@ -207,14 +207,15 @@ export class InputController {
     }
     const b = this.hover.block;
     const mat = MATERIALS[b.m];
-    const fillPct = mat.energyCapacity > 0 ? Math.round((b.energy / mat.energyCapacity) * 100) : 0;
+    const cap = energyCapacity(b);
+    const fillPct = cap > 0 ? Math.round((b.energy / cap) * 100) : 0;
     const owner = this.hover.ship.owner ?? "asteroid";
     const control = b.m === "silicon" ? (b.dir ? ` — points ${b.dir}` : " — off") : "";
     this.tooltipEl.innerHTML =
       `ship #${this.hover.ship.id} — ${escapeHtml(owner)}<br/>` +
       `${b.m}${control}<br/>` +
       `mass ${formatMass(b.mass)}/${mat.maxMass} kg<br/>` +
-      `energy ${formatEnergy(b.energy)}/${formatEnergy(mat.energyCapacity)} (${fillPct}%)`;
+      `energy ${formatEnergy(b.energy)}/${formatEnergy(cap)} (${fillPct}%)`;
     this.tooltipEl.classList.remove("hidden");
     this.tooltipEl.style.left = `${clientX + 14}px`;
     this.tooltipEl.style.top = `${clientY + 14}px`;

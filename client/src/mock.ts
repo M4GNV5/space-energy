@@ -3,7 +3,7 @@
 // server running. Implements the same interface as `Net`.
 
 import type { NetHandlers, NetLike } from "./net";
-import { MATERIALS, type BlockView, type ClientMsg, type Material, type ShipView, type StateMsg } from "./protocol";
+import { energyCapacity, type BlockView, type ClientMsg, type Material, type ShipView, type StateMsg } from "./protocol";
 
 const START_BLOCKS: Array<{ p: [number, number]; m: Material; mass: number }> = [
   { p: [-1, 1], m: "lead", mass: 5000 },
@@ -17,8 +17,8 @@ const START_BLOCKS: Array<{ p: [number, number]; m: Material; mass: number }> = 
   { p: [1, -1], m: "lead", mass: 5000 },
 ];
 
-function energyFor(m: Material, t: number): number {
-  const cap = MATERIALS[m].energyCapacity;
+function energyFor(m: Material, mass: number, t: number): number {
+  const cap = energyCapacity({ m, mass });
   if (m === "tungsten") return cap * (0.5 + 0.45 * Math.sin(t * 0.3)); // sweeps past the 80% burst-warning line
   if (m === "uranium") return cap * Math.min(1, 0.1 + t * 0.01);
   return cap * (0.2 + 0.1 * Math.sin(t + m.length));
@@ -56,7 +56,7 @@ export class MockNet implements NetLike {
       p: b.p,
       m: b.m,
       mass: b.mass,
-      energy: energyFor(b.m, this.t),
+      energy: energyFor(b.m, b.mass, this.t),
     }));
 
     const ship: ShipView = {

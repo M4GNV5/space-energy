@@ -17,46 +17,59 @@ export interface Bind {
 /** Keys the bind editor must refuse: they have fixed meanings. */
 export const RESERVED_KEYS = new Set(["f", "c", "b", "tab", "escape"]);
 
+// Cells refer to the starter ship: `STARTER_LAYOUT` in server/src/sim/worldgen.rs.
 export const DEFAULT_BINDS: Bind[] = [
   {
+    // Forward: the five main engines.
     key: "w",
-    actions: [
-      { block: [-1, -1], dir: "s", energy: 0, mass: 2 },
-      { block: [1, -1], dir: "s", energy: 0, mass: 2 },
-    ],
+    actions: [-2, -1, 0, 1, 2].map((x): BindAction => ({ block: [x, -3], dir: "s", energy: 0, mass: 1.5 })),
   },
   {
+    // Brake / reverse: the two front thrusters.
     key: "s",
     actions: [
-      { block: [-1, 1], dir: "n", energy: 0, mass: 2 },
-      { block: [1, 1], dir: "n", energy: 0, mass: 2 },
+      { block: [-2, 4], dir: "n", energy: 0, mass: 2 },
+      { block: [2, 4], dir: "n", energy: 0, mass: 2 },
     ],
   },
   {
+    // Turn left: front-right thruster pushes the nose left, rear-left engine pushes the tail right.
     key: "a",
     actions: [
-      { block: [1, 1], dir: "e", energy: 0, mass: 0.5 },
-      { block: [-1, -1], dir: "w", energy: 0, mass: 0.5 },
+      { block: [2, 4], dir: "e", energy: 0, mass: 2 },
+      { block: [-2, -3], dir: "w", energy: 0, mass: 2 },
     ],
   },
   {
     key: "d",
     actions: [
-      { block: [-1, 1], dir: "w", energy: 0, mass: 0.5 },
-      { block: [1, -1], dir: "e", energy: 0, mass: 0.5 },
+      { block: [-2, 4], dir: "w", energy: 0, mass: 2 },
+      { block: [2, -3], dir: "e", energy: 0, mass: 2 },
     ],
   },
   {
+    // Laser at the nose tip.
     key: " ",
-    actions: [{ block: [0, 1], dir: "n", energy: 100000, mass: 0 }],
+    actions: [{ block: [0, 10], dir: "n", energy: 100000, mass: 0 }],
   },
   {
+    // Vent hull heat into space from the nose corners.
     key: "x",
-    actions: [{ block: [0, -1], dir: "s", energy: 10000, mass: 0 }],
+    actions: [
+      { block: [-2, 9], dir: "n", energy: 100000, mass: 0 },
+      { block: [2, 9], dir: "n", energy: 100000, mass: 0 },
+    ],
   },
+  // Reactor outlets (silicon): 1/2 open/close the outlet to the battery and laser,
+  // 3/4 open/close the outlet to the engines.
+  { key: "1", actions: [{ block: [0, 2], dir: "n", energy: 1, mass: 0 }] },
+  { key: "2", actions: [{ block: [0, 2], dir: "all", energy: 1, mass: 0 }] },
+  { key: "3", actions: [{ block: [0, 0], dir: "s", energy: 1, mass: 0 }] },
+  { key: "4", actions: [{ block: [0, 0], dir: "all", energy: 1, mass: 0 }] },
 ];
 
-const STORAGE_KEY = "space-energy-binds";
+// Bump the version when the starter ship layout changes, so stale binds are dropped.
+const STORAGE_KEY = "space-energy-binds-v2";
 
 function cloneDefaults(): Bind[] {
   return JSON.parse(JSON.stringify(DEFAULT_BINDS)) as Bind[];

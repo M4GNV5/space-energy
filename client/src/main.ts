@@ -7,7 +7,7 @@ import { Hud } from "./hud";
 import { InputController } from "./input";
 import { MockNet } from "./mock";
 import { Net, type NetHandlers, type NetLike } from "./net";
-import { MATERIALS, type ShipId, type StateMsg } from "./protocol";
+import { energyCapacity, type ShipId, type StateMsg } from "./protocol";
 import { computePoses, render } from "./render";
 import { GameState } from "./state";
 
@@ -142,7 +142,7 @@ function startGame(name: string): void {
     }
     const speed = Math.hypot(ship.vx, ship.vy);
     const mass = ship.blocks.reduce((s, b) => s + b.mass, 0);
-    const fills = ship.blocks.map((b) => b.energy / MATERIALS[b.m].energyCapacity);
+    const fills = ship.blocks.map((b) => b.energy / energyCapacity(b));
     const avgFill = fills.length > 0 ? fills.reduce((a, b) => a + b, 0) / fills.length : 0;
     const maxFill = fills.length > 0 ? Math.max(...fills) : 0;
     hud.setInfo({

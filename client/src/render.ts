@@ -1,7 +1,7 @@
 // Canvas 2D rendering. Pure drawing code, no game logic beyond extrapolation.
 
 import { type Camera, localToWorld, worldToScreen } from "./camera";
-import { MATERIALS, type BlockView, type Cell, type ShipId, type ShipView } from "./protocol";
+import { MATERIALS, energyCapacity, type BlockView, type Cell, type ShipId, type ShipView } from "./protocol";
 import { extrapolate, type GameState, type Pose } from "./state";
 import { type BuildSelection, type PickResult } from "./ships";
 
@@ -207,7 +207,7 @@ function drawShip(
       ctx.fillStyle = MATERIALS[b.m].color;
       ctx.fillRect(-half, -half, blockPx, blockPx);
 
-      const cap = MATERIALS[b.m].energyCapacity;
+      const cap = energyCapacity(b);
       const fill = cap > 0 ? Math.min(1, b.energy / cap) : 0;
       let overlayAlpha = 0.15 + 0.55 * fill;
       if (fill > 0.8) {

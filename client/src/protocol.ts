@@ -17,14 +17,20 @@ export type ShipId = number;
 export type Cell = [number, number];
 
 // Keep in sync with server/src/sim/consts.rs (used for hover "5/9000").
-export const MATERIALS: Record<Material, { maxMass: number; energyCapacity: number; color: string }> = {
-  iron: { maxMass: 7900, energyCapacity: 2.0e6, color: "#8a8f98" },
-  copper: { maxMass: 8900, energyCapacity: 1.5e6, color: "#c8773a" },
-  lead: { maxMass: 11300, energyCapacity: 1.0e6, color: "#5a5f7a" },
-  plastic: { maxMass: 1200, energyCapacity: 0.5e6, color: "#e8e2c8" },
-  tungsten: { maxMass: 19300, energyCapacity: 2.0e7, color: "#3e8a7e" },
-  uranium: { maxMass: 19000, energyCapacity: 4.0e6, color: "#6fcf3f" },
-  silicon: { maxMass: 2330, energyCapacity: 1.0e6, color: "#3b5bb5" },};
+export const MATERIALS: Record<Material, { maxMass: number; energyPerKg: number; color: string }> = {
+  iron: { maxMass: 7900, energyPerKg: 6500, color: "#8a8f98" },
+  copper: { maxMass: 8900, energyPerKg: 5000, color: "#c8773a" },
+  lead: { maxMass: 11300, energyPerKg: 250, color: "#5a5f7a" },
+  plastic: { maxMass: 1200, energyPerKg: 5000, color: "#e8e2c8" },
+  tungsten: { maxMass: 19300, energyPerKg: 13000, color: "#3e8a7e" },
+  uranium: { maxMass: 19000, energyPerKg: 4000, color: "#6fcf3f" },
+  silicon: { maxMass: 2330, energyPerKg: 5000, color: "#3b5bb5" },
+};
+
+/** Energy (J) a block can hold before it bursts. Scales with its mass. */
+export function energyCapacity(b: { m: Material; mass: number }): number {
+  return MATERIALS[b.m].energyPerKg * b.mass;
+}
 
 export type ClientMsg =
   | { t: "login"; name: string }

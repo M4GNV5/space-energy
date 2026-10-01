@@ -48,6 +48,8 @@ pub struct World {
     /// Commands queued by the network layer, applied at the next tick.
     pub pending: Vec<(String, Command)>,
     emit_queue: Vec<(ShipId, Cell, Dir, f32, f32)>,
+    /// Ships whose thrust increased their speed this tick; they are not braked.
+    accelerating: HashSet<ShipId>,
     /// (player, message) pairs produced by failed commands this tick.
     pub errors: Vec<(String, String)>,
 }
@@ -125,6 +127,7 @@ impl World {
             sun_cache: HashMap::new(),
             pending: Vec::new(),
             emit_queue: Vec::new(),
+            accelerating: HashSet::new(),
             errors: Vec::new(),
         }
     }
@@ -204,10 +207,14 @@ impl World {
         match hit {
             Some(h) => {
                 let factor = 1.0 / (1.0 + (h.t / consts::FALLOFF_DISTANCE).powi(2));
-                let delivered = if factor < consts::MIN_FALLOFF { 0.0 } else { energy * factor };
+                let mut delivered = if factor < consts::MIN_FALLOFF { 0.0 } else { energy * factor };
                 if delivered > 0.0 {
                     if let HitKind::Block(sid, cell) = h.kind {
                         if let Some(ship) = self.ships.get_mut(&sid) {
+                            // Sunlight (the only rays that ignore a sun) barely heats asteroids.
+                            if ignore_sun.is_some() && ship.owner.is_none() {
+                                delivered *= consts::ASTEROID_SUN_ABSORPTION;
+                            }
                             if let Some(b) = ship.blocks.get_mut(&cell) {
                                 b.energy += delivered;
                             }
@@ -250,7 +257,8 @@ impl World {
     }
 
     fn apply_uranium(&mut self) {
-        for ship in self.ships.values_mut() {
+        // Uranium in asteroids is inert ore, otherwise they would heat themselves up and burst.
+        for ship in self.ships.values_mut().filter(|s| s.owner.is_some()) {
             let mut changed = false;
             for block in ship.blocks.values_mut() {
                 if block.material == Material::Uranium {
@@ -360,8 +368,8 @@ impl World {
     }
 
     fn apply_sun_emissions(&mut self, suns: &[Sun]) {
-        let per = consts::SUN_POWER / consts::SUN_RAYS as f32;
         for (i, sun) in suns.iter().enumerate() {
+            let per = sun.radius * consts::SUN_POWER_PER_M / consts::SUN_RAYS as f32;
             for _ in 0..consts::SUN_RAYS {
                 let angle: f32 = self.rng.random_range(0.0..std::f32::consts::TAU);
                 let (s, c) = angle.sin_cos();
@@ -376,16 +384,21 @@ impl World {
             let scale = if ship.owner.is_none() { consts::ASTEROID_CONDUCTION } else { 1.0 };
             let mut deltas: HashMap<Cell, f32> = HashMap::new();
             for (&cell, a) in &ship.blocks {
-                let cap_a = consts::props(a.material).energy_capacity;
-                let cond_a = consts::props(a.material).conductance;
+                let cap_a = a.energy_capacity();
+                let props_a = consts::props(a.material);
                 let fill_a = a.energy / cap_a;
                 for (dx, dy, pair_dir) in [(1, 0, Dir::E), (0, 1, Dir::N)] {
                     let ncell = [cell[0] + dx, cell[1] + dy];
                     if let Some(nb) = ship.blocks.get(&ncell) {
-                        let cap_b = consts::props(nb.material).energy_capacity;
-                        let cond_b = consts::props(nb.material).conductance;
+                        let cap_b = nb.energy_capacity();
+                        let props_b = consts::props(nb.material);
                         let fill_b = nb.energy / cap_b;
-                        let k = cond_a.min(cond_b) * scale;
+                        // The better conductor sets the rate, unless an isolator is involved.
+                        let k = if props_a.isolator || props_b.isolator {
+                            props_a.conductance.min(props_b.conductance)
+                        } else {
+                            props_a.conductance.max(props_b.conductance)
+                        } * scale;
                         let flow = k * (fill_a - fill_b) * cap_a.min(cap_b) / 2.0;
                         // Silicon only lets energy flow along its direction.
                         let (a_fwd, a_back) = a.conduction_gate(pair_dir);
@@ -428,8 +441,7 @@ impl World {
         let mut events = Vec::new();
         for (&id, ship) in self.ships.iter() {
             for (&cell, block) in ship.blocks.iter() {
-                let cap = consts::props(block.material).energy_capacity;
-                if block.energy > cap {
+                if block.energy > block.energy_capacity() {
                     events.push(BurstEvent {
                         ship_id: id,
                         cell,
@@ -482,8 +494,13 @@ impl World {
             ship.pos[0] += ship.vel[0] * consts::DT;
             ship.pos[1] += ship.vel[1] * consts::DT;
             ship.rot += ship.omega * consts::DT;
-            ship.vel[0] *= 1.0 - consts::LINEAR_DAMPING;
-            ship.vel[1] *= 1.0 - consts::LINEAR_DAMPING;
+            // Constant deceleration down to a full stop, unless the ship is speeding up.
+            let speed = ship.vel[0].hypot(ship.vel[1]);
+            if speed > 0.0 && !self.accelerating.contains(&ship.id) {
+                let keep = (speed - consts::LINEAR_BRAKE * consts::DT).max(0.0) / speed;
+                ship.vel[0] *= keep;
+                ship.vel[1] *= keep;
+            }
             ship.omega *= 1.0 - consts::ANGULAR_DAMPING;
         }
     }
@@ -528,8 +545,8 @@ impl World {
             let angle: f32 = self.rng.random_range(0.0..std::f32::consts::TAU);
             let d: f32 = self.rng.random_range(consts::ASTEROID_SPAWN_MIN..consts::ASTEROID_SPAWN_MAX);
             let pos = [near[0] + angle.cos() * d, near[1] + angle.sin() * d];
-            let suns = self.suns_in_view(pos, consts::SUN_RADIUS_MAX + 20.0);
-            if suns.iter().any(|s| ship::dist([s.x, s.y], pos) < s.radius + 20.0) {
+            let suns = self.suns_in_view(pos, consts::SUN_RADIUS_MAX + consts::ASTEROID_SUN_MARGIN);
+            if suns.iter().any(|s| ship::dist([s.x, s.y], pos) < s.radius + consts::ASTEROID_SUN_MARGIN) {
                 continue;
             }
             let id = self.next_ship_id;
@@ -547,9 +564,14 @@ impl World {
         self.apply_uranium();
         let suns = self.compute_active_suns();
         let emit_queue = std::mem::take(&mut self.emit_queue);
+        let speed_of = |ships: &HashMap<ShipId, Ship>, id: &ShipId| ships.get(id).map(|s| s.vel[0].hypot(s.vel[1]));
+        let speeds_before: HashMap<ShipId, f32> =
+            emit_queue.iter().filter_map(|(id, ..)| Some((*id, speed_of(&self.ships, id)?))).collect();
         for (ship, block, dir, energy, mass) in emit_queue {
             self.process_emit(&suns, ship, block, dir, energy, mass);
         }
+        self.accelerating =
+            speeds_before.into_iter().filter(|(id, before)| speed_of(&self.ships, id) > Some(*before)).map(|(id, _)| id).collect();
         self.apply_sun_emissions(&suns);
         self.apply_conduction();
         self.apply_asteroid_cooling();
@@ -620,15 +642,66 @@ mod tests {
         assert!(copper_flow > plastic_flow * 20.0, "copper ({copper_flow}) should conduct much faster than plastic ({plastic_flow})");
     }
 
+    /// Energy gained in one tick by an empty `sink` block next to a half-full `source` block.
+    fn one_tick_flow(source: Material, sink: Material) -> f32 {
+        let mut w = World::new(1);
+        let mut ship = Ship::new(1, Some("p".into()));
+        let mut src = Block::new(source, 100.0, 0.0);
+        src.energy = src.energy_capacity() * 0.5;
+        ship.blocks.insert([0, 0], src);
+        ship.blocks.insert([1, 0], Block::new(sink, 100.0, 0.0));
+        ship.recompute_com_inertia();
+        w.ships.insert(1, ship);
+        w.apply_conduction();
+        w.ships[&1].blocks[&[1, 0]].energy
+    }
+
+    #[test]
+    fn better_conductor_of_a_pair_sets_the_rate() {
+        let lead = consts::props(Material::Lead);
+        let copper = consts::props(Material::Copper);
+        let expected = copper.conductance * 0.5 * (100.0 * lead.energy_per_kg) / 2.0;
+        // Both directions run at copper's rate, limited by lead's smaller capacity.
+        approx(one_tick_flow(Material::Copper, Material::Lead), expected, 1.0);
+        approx(one_tick_flow(Material::Lead, Material::Copper), expected, 1.0);
+        assert!(one_tick_flow(Material::Lead, Material::Lead) < expected / 2.0);
+    }
+
+    #[test]
+    fn plastic_isolates_even_next_to_copper() {
+        let plastic = consts::props(Material::Plastic);
+        let expected = plastic.conductance * 0.5 * (100.0 * plastic.energy_per_kg) / 2.0;
+        approx(one_tick_flow(Material::Copper, Material::Plastic), expected, 1.0);
+    }
+
+    #[test]
+    fn heavier_block_holds_more_energy_before_bursting() {
+        let mut w = World::new(1);
+        let energy = 150.0 * consts::props(Material::Iron).energy_per_kg;
+        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 100.0, energy);
+        single_block_ship(&mut w, 2, [5000.0, 0.0], Material::Iron, 200.0, energy);
+
+        w.process_bursts(&[]);
+
+        assert!(w.ships[&1].blocks.is_empty(), "light block should burst");
+        assert!(!w.ships[&2].blocks.is_empty(), "heavy block should hold");
+    }
+
     #[test]
     fn uranium_produces_energy_and_loses_mass() {
         let mut w = World::new(1);
-        let mut ship = Ship::new(1, None);
+        let mut ship = Ship::new(1, Some("p".into()));
         ship.blocks.insert([0, 0], Block::new(Material::Uranium, 1000.0, 0.0));
         ship.recompute_com_inertia();
         w.ships.insert(1, ship);
+        single_block_ship(&mut w, 2, [50.0, 0.0], Material::Uranium, 1000.0, 0.0);
 
         w.apply_uranium();
+
+        // Asteroid uranium is inert.
+        let ore = w.ships[&2].blocks[&[0, 0]];
+        approx(ore.mass, 1000.0, 1e-6);
+        approx(ore.energy, 0.0, 1e-6);
 
         let b = w.ships[&1].blocks[&[0, 0]];
         approx(b.mass, 1000.0 - consts::URANIUM_KG_PER_TICK, 1e-6);
@@ -732,6 +805,26 @@ mod tests {
     }
 
     #[test]
+    fn asteroids_absorb_little_sunlight_but_full_laser_energy() {
+        let mut w = World::new(1);
+        let sun = Sun { x: -200.0, y: 0.0, radius: 100.0 };
+        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 0.0);
+        single_block_ship(&mut w, 2, [0.0, 500.0], Material::Iron, 1000.0, 0.0);
+        w.ships.get_mut(&2).unwrap().owner = Some("p".into());
+
+        // The same sun ray on an asteroid and on a player ship.
+        w.cast_and_apply_ray(&[sun], [-100.0, 0.0], [1.0, 0.0], 10_000.0, None, Some(0), false);
+        w.cast_and_apply_ray(&[sun], [-100.0, 500.0], [1.0, 0.0], 10_000.0, None, Some(0), false);
+        let (asteroid, player) = (w.ships[&1].blocks[&[0, 0]].energy, w.ships[&2].blocks[&[0, 0]].energy);
+        assert!(player > 0.0);
+        approx(asteroid, player * consts::ASTEROID_SUN_ABSORPTION, 1.0);
+
+        // A laser ray on the asteroid is not reduced.
+        w.cast_and_apply_ray(&[], [-100.0, 0.0], [1.0, 0.0], 10_000.0, None, None, true);
+        approx(w.ships[&1].blocks[&[0, 0]].energy, asteroid + player, 1.0);
+    }
+
+    #[test]
     fn missed_player_beam_is_still_reported() {
         let mut w = World::new(1);
         single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
@@ -802,16 +895,55 @@ mod tests {
     }
 
     #[test]
-    fn damping_slows_ships() {
+    fn brake_decelerates_at_a_constant_rate_and_halts() {
         let mut w = World::new(1);
         single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 0.0);
-        w.ships.get_mut(&1).unwrap().vel = [10.0, 0.0];
+        w.ships.get_mut(&1).unwrap().vel = [50.0, 0.0];
         w.ships.get_mut(&1).unwrap().omega = 1.0;
 
         w.integrate();
 
-        let ship = &w.ships[&1];
-        approx(ship.vel[0], 10.0 * (1.0 - consts::LINEAR_DAMPING), 1e-4);
-        approx(ship.omega, 1.0 * (1.0 - consts::ANGULAR_DAMPING), 1e-4);
+        approx(w.ships[&1].vel[0], 50.0 - consts::LINEAR_BRAKE * consts::DT, 1e-4);
+        approx(w.ships[&1].omega, 1.0 - consts::ANGULAR_DAMPING, 1e-4);
+
+        let ticks_to_halt = (50.0 / (consts::LINEAR_BRAKE * consts::DT)) as usize + 1;
+        for _ in 0..ticks_to_halt {
+            w.integrate();
+        }
+        assert_eq!(w.ships[&1].vel, [0.0, 0.0]);
+    }
+
+    /// Queues one tick of mass emission from the single block of ship 1 and steps the world.
+    fn step_with_thrust(w: &mut World, dir: Dir) {
+        w.queue_command("p".into(), Command::Emit { ship: 1, block: [0, 0], dir, energy: 0.0, mass: 1.0 });
+        w.step();
+    }
+
+    #[test]
+    fn brake_is_off_while_speeding_up_and_on_while_slowing_down() {
+        // Emitting west pushes the ship east. One tick of thrust changes the speed by 1 m/s.
+        let moving_ship = |w: &mut World| {
+            single_block_ship(w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
+            w.ships.get_mut(&1).unwrap().vel = [20.0, 0.0];
+        };
+        let brake = consts::LINEAR_BRAKE * consts::DT;
+
+        let mut w = World::new(1);
+        moving_ship(&mut w);
+        step_with_thrust(&mut w, Dir::W);
+        approx(w.ships[&1].vel[0], 21.0, 0.01);
+
+        // Retro thrust adds to the brake.
+        let mut w = World::new(1);
+        moving_ship(&mut w);
+        step_with_thrust(&mut w, Dir::E);
+        approx(w.ships[&1].vel[0], 19.0 - brake, 0.01);
+
+        // Thrust stopped: the brake is back on the next tick.
+        let mut w = World::new(1);
+        moving_ship(&mut w);
+        step_with_thrust(&mut w, Dir::W);
+        w.step();
+        approx(w.ships[&1].vel[0], 21.0 - brake, 0.01);
     }
 }

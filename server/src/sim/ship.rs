@@ -19,6 +19,11 @@ impl Block {
         Block { material, mass, energy, dir: None }
     }
 
+    /// Energy (J) this block can hold before it bursts. Scales with its mass.
+    pub fn energy_capacity(&self) -> f32 {
+        consts::props(self.material).energy_per_kg * self.mass
+    }
+
     /// Which way energy may flow between a pair of adjacent blocks a -> b,
     /// where b lies at `pair_dir` from a: (a -> b allowed, b -> a allowed).
     /// Called on both blocks of the pair with the same `pair_dir`.
@@ -48,6 +53,8 @@ pub struct Ship {
     pub com: [f32; 2],
     pub inertia: f32,
     pub total_mass: f32,
+    /// Bounding circle radius around `pos`, updated by `recompute_com_inertia`.
+    radius: f32,
     pub blocks: HashMap<Cell, Block>,
 }
 
@@ -63,6 +70,7 @@ impl Ship {
             com: [0.0, 0.0],
             inertia: 1.0,
             total_mass: 0.0,
+            radius: 0.0,
             blocks: HashMap::new(),
         }
     }
@@ -80,6 +88,7 @@ impl Ship {
         if total_mass <= 0.0 {
             self.total_mass = 0.0;
             self.inertia = 1.0;
+            self.radius = 0.0;
             return;
         }
         let new_com = [sum[0] / total_mass, sum[1] / total_mass];
@@ -92,11 +101,14 @@ impl Ship {
         self.com = new_com;
 
         let mut inertia = 0.0f32;
+        let mut max_d2 = 0.0f32;
         for (cell, b) in &self.blocks {
             let dx = cell[0] as f32 - new_com[0];
             let dy = cell[1] as f32 - new_com[1];
             inertia += b.mass * (dx * dx + dy * dy) + b.mass / 6.0;
+            max_d2 = max_d2.max(dx * dx + dy * dy);
         }
+        self.radius = max_d2.sqrt() + std::f32::consts::FRAC_1_SQRT_2;
         self.total_mass = total_mass;
         self.inertia = inertia.max(1e-6);
     }
@@ -155,15 +167,9 @@ impl Ship {
     }
 
     /// Bounding circle radius (world units) around `pos` containing all blocks.
+    /// Cached: only valid after `recompute_com_inertia`.
     pub fn bounding_radius(&self) -> f32 {
-        self.blocks
-            .keys()
-            .map(|c| {
-                let dx = c[0] as f32 - self.com[0];
-                let dy = c[1] as f32 - self.com[1];
-                (dx * dx + dy * dy).sqrt() + std::f32::consts::FRAC_1_SQRT_2
-            })
-            .fold(0.0f32, f32::max)
+        self.radius
     }
 
     fn is_adjacent_to_ship(&self, cell: Cell) -> bool {
@@ -202,24 +208,21 @@ impl Ship {
             return Ok(());
         }
 
+        // The moved mass takes its share of the energy along, so the source keeps its fill ratio.
+        let moved_energy = from_block.energy * kg_clamped / from_block.mass;
         if let Some(fb) = self.blocks.get_mut(&from) {
             fb.mass -= kg_clamped;
+            fb.energy -= moved_energy;
         }
         if !to_exists {
             self.blocks.insert(to, Block::new(material, 0.0, 0.0));
         }
         if let Some(tb) = self.blocks.get_mut(&to) {
             tb.mass += kg_clamped;
+            tb.energy += moved_energy;
         }
-
-        if let Some(fb) = self.blocks.get(&from) {
-            if fb.mass <= 1e-6 {
-                let leftover_energy = fb.energy;
-                self.blocks.remove(&from);
-                if let Some(tb) = self.blocks.get_mut(&to) {
-                    tb.energy += leftover_energy;
-                }
-            }
+        if self.blocks.get(&from).is_some_and(|fb| fb.mass <= 1e-6) {
+            self.blocks.remove(&from);
         }
 
         self.recompute_com_inertia();
@@ -352,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn move_mass_partial_preserves_total_mass_and_leaves_energy_behind() {
+    fn move_mass_partial_preserves_total_mass_and_takes_energy_share_along() {
         let mut ship = Ship::new(1, None);
         ship.blocks.insert([0, 0], Block::new(Material::Copper, 200.0, 40.0));
         ship.blocks.insert([1, 0], Block::new(Material::Copper, 50.0, 10.0));
@@ -365,9 +368,16 @@ mod tests {
         approx(total_after, total_before, 1e-3);
         approx(ship.blocks[&[0, 0]].mass, 170.0, 1e-4);
         approx(ship.blocks[&[1, 0]].mass, 80.0, 1e-4);
-        // source didn't empty, so its energy stays put
-        approx(ship.blocks[&[0, 0]].energy, 40.0, 1e-4);
-        approx(ship.blocks[&[1, 0]].energy, 10.0, 1e-4);
+        // 30 of 200 kg moved, so 15% of the source's energy went along
+        approx(ship.blocks[&[0, 0]].energy, 34.0, 1e-4);
+        approx(ship.blocks[&[1, 0]].energy, 16.0, 1e-4);
+    }
+
+    #[test]
+    fn energy_capacity_scales_with_mass() {
+        let per_kg = consts::props(Material::Iron).energy_per_kg;
+        approx(Block::new(Material::Iron, 100.0, 0.0).energy_capacity(), 100.0 * per_kg, 1e-2);
+        approx(Block::new(Material::Iron, 200.0, 0.0).energy_capacity(), 200.0 * per_kg, 1e-2);
     }
 
     #[test]

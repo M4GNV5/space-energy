@@ -1,10 +1,12 @@
 //! Deterministic suns, asteroid spawning, and the starter ship layout.
 
+use std::collections::HashSet;
+
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::protocol::{Cell, Material, ShipId};
+use crate::protocol::{Cell, Dir, Material, ShipId};
 use crate::sim::consts;
 use crate::sim::ship::{Block, Ship};
 use crate::sim::world::{Sun, World};
@@ -40,17 +42,49 @@ pub fn sun_in_chunk(seed: u64, cx: i32, cy: i32) -> Option<Sun> {
     Some(Sun { x, y, radius })
 }
 
-const STARTER_LAYOUT: [(Cell, Material, f32); 9] = [
-    ([-1, 1], Material::Lead, 3000.0),
-    ([0, 1], Material::Iron, 500.0),
-    ([1, 1], Material::Lead, 3000.0),
-    ([-1, 0], Material::Copper, 500.0),
-    ([0, 0], Material::Uranium, 1000.0),
-    ([1, 0], Material::Copper, 500.0),
-    ([-1, -1], Material::Lead, 3000.0),
-    ([0, -1], Material::Tungsten, 1000.0),
-    ([1, -1], Material::Lead, 3000.0),
+/// Starter ship, nose up (+y). One char per cell: columns are x = -4..=4, the
+/// first row is y = `STARTER_TOP_Y`. See `starter_block` for the legend.
+///
+/// The uranium reactor sits in a plastic shell; its only outlets are the two
+/// silicon blocks, pointing at the copper spine (north, to the tungsten battery
+/// and the laser at the nose tip) and at the copper bus (south, to the engines).
+/// Plastic also lines the spine and the bus, so the iron hull only touches the
+/// power circuits at the nose and at the lead thrusters.
+///
+/// The default key binds in `client/src/binds.ts` refer to these cells.
+const STARTER_LAYOUT: [&str; 14] = [
+    "....I....", // 10  laser
+    "..LCCCL..", //  9
+    "..IPTPI..", //  8  battery
+    "..IPTPI..", //  7
+    "..IPCPI..", //  6
+    "..IPCPI..", //  5
+    "..lCCCl..", //  4  front thrusters
+    ".IIPCPII.", //  3
+    ".IPP^PPI.", //  2  reactor outlet to the spine
+    ".IPPUPPI.", //  1  reactor
+    ".IPPvPPI.", //  0  reactor outlet to the engines
+    "IIPPCPPII", // -1
+    "IPCCCCCPI", // -2  engine bus
+    "IILLLLLII", // -3  main engines
 ];
+const STARTER_TOP_Y: i32 = 10;
+
+/// Starter ship legend: (material, mass in kg, energy fill ratio, silicon direction).
+fn starter_block(ch: char) -> Option<(Material, f32, f32, Option<Dir>)> {
+    Some(match ch {
+        'I' => (Material::Iron, 300.0, 0.1, None),
+        'P' => (Material::Plastic, 100.0, 0.1, None),
+        'C' => (Material::Copper, 300.0, 0.1, None),
+        'T' => (Material::Tungsten, 1500.0, 0.3, None),
+        'U' => (Material::Uranium, 1000.0, 0.1, None),
+        '^' => (Material::Silicon, 200.0, 0.1, Some(Dir::N)),
+        'v' => (Material::Silicon, 200.0, 0.1, Some(Dir::S)),
+        'L' => (Material::Lead, 4000.0, 0.5, None),
+        'l' => (Material::Lead, 2000.0, 0.5, None),
+        _ => return None,
+    })
+}
 
 /// Builds and places a starter ship for `owner`, inserts it into the world,
 /// and returns its id.
@@ -59,9 +93,15 @@ pub fn make_starter_ship(world: &mut World, owner: String) -> ShipId {
     world.next_ship_id += 1;
 
     let mut ship = Ship::new(id, Some(owner));
-    for (cell, material, mass) in STARTER_LAYOUT {
-        let cap = consts::props(material).energy_capacity;
-        ship.blocks.insert(cell, Block::new(material, mass, cap * 0.1));
+    for (row, line) in STARTER_LAYOUT.iter().enumerate() {
+        for (col, ch) in line.chars().enumerate() {
+            let Some((material, mass, fill, dir)) = starter_block(ch) else { continue };
+            let cell = [col as i32 - 4, STARTER_TOP_Y - row as i32];
+            let mut block = Block::new(material, mass, 0.0);
+            block.energy = block.energy_capacity() * fill;
+            block.dir = dir;
+            ship.blocks.insert(cell, block);
+        }
     }
     ship.recompute_com_inertia();
 
@@ -93,18 +133,24 @@ pub fn make_starter_ship(world: &mut World, owner: String) -> ShipId {
     id
 }
 
-/// Grows a random 4-connected blob of `n` cells starting at (0,0).
-fn random_blob(rng: &mut ChaCha8Rng, n: usize) -> Vec<Cell> {
-    let mut cells: Vec<Cell> = vec![[0, 0]];
+/// Grows a random 4-connected blob of `n` cells starting at (0,0). Each new
+/// cell usually copies the material of the cell it grew from, so materials
+/// form veins.
+fn random_blob(rng: &mut ChaCha8Rng, n: usize) -> Vec<(Cell, Material)> {
+    let random_material = |rng: &mut ChaCha8Rng| ASTEROID_MATERIALS[rng.random_range(0..ASTEROID_MATERIALS.len())];
+    let mut cells: Vec<(Cell, Material)> = vec![([0, 0], random_material(rng))];
+    let mut taken: HashSet<Cell> = HashSet::from([[0, 0]]);
     let dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     let mut guard = 0;
-    while cells.len() < n && guard < 1000 {
+    while cells.len() < n && guard < n * 100 {
         guard += 1;
-        let base = cells[rng.random_range(0..cells.len())];
+        let (base, base_material) = cells[rng.random_range(0..cells.len())];
         let d = dirs[rng.random_range(0..4)];
         let cand = [base[0] + d[0], base[1] + d[1]];
-        if !cells.contains(&cand) {
-            cells.push(cand);
+        if taken.insert(cand) {
+            let material =
+                if rng.random_bool(consts::ASTEROID_VEIN_CHANCE) { base_material } else { random_material(rng) };
+            cells.push((cand, material));
         }
     }
     cells
@@ -126,10 +172,9 @@ pub fn build_asteroid(rng: &mut ChaCha8Rng, id: ShipId, pos: [f32; 2]) -> Ship {
     let cells = random_blob(rng, n);
 
     let mut ship = Ship::new(id, None);
-    for cell in cells {
-        let material = ASTEROID_MATERIALS[rng.random_range(0..ASTEROID_MATERIALS.len())];
+    for (cell, material) in cells {
         let max_mass = consts::props(material).max_mass;
-        let frac: f32 = rng.random_range(0.2..=1.0);
+        let frac: f32 = rng.random_range(consts::ASTEROID_MASS_FRAC_MIN..=consts::ASTEROID_MASS_FRAC_MAX);
         ship.blocks.insert(cell, Block::new(material, max_mass * frac, 0.0));
     }
     ship.recompute_com_inertia();
@@ -172,6 +217,32 @@ mod tests {
             let id = make_starter_ship(&mut world, "p".into());
             assert!(world.ships.contains_key(&id));
         }
+    }
+
+    #[test]
+    fn starter_reactor_is_insulated_and_feeds_both_circuits() {
+        assert!(STARTER_LAYOUT.iter().all(|row| row.len() == 9));
+        let mut world = World::new(1);
+        let id = make_starter_ship(&mut world, "p".into());
+        let blocks = &world.ships[&id].blocks;
+
+        // The reactor only touches plastic and its two silicon outlets.
+        let (&reactor, _) = blocks.iter().find(|(_, b)| b.material == Material::Uranium).expect("reactor");
+        for d in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
+            let m = blocks[&[reactor[0] + d[0], reactor[1] + d[1]]].material;
+            assert!(matches!(m, Material::Plastic | Material::Silicon), "reactor touches {m:?}");
+        }
+
+        // Both outlets start open, otherwise the reactor would burst right away.
+        let energy = |w: &World, cell: Cell| w.ships[&id].blocks[&cell].energy;
+        let (spine, bus) = ([0, 5], [0, -2]);
+        let (spine_before, bus_before) = (energy(&world, spine), energy(&world, bus));
+        for _ in 0..500 {
+            world.step();
+        }
+        assert!(energy(&world, spine) > spine_before, "spine should be fed by the reactor");
+        assert!(energy(&world, bus) > bus_before, "engine bus should be fed by the reactor");
+        assert_eq!(world.ships[&id].blocks.len(), 86, "nothing should burst while idling");
     }
 
     #[test]
