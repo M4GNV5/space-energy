@@ -114,6 +114,9 @@ pub struct SunView {
 pub struct PacketView {
     pub x: f32,
     pub y: f32,
+    /// Velocity (m/s), so the client can draw fast packets as streaks.
+    pub vx: f32,
+    pub vy: f32,
     pub m: Material,
     pub mass: f32,
 }
@@ -126,4 +129,8 @@ pub struct RayView {
     pub y2: f32,
     /// Energy delivered at the end point (J), for line intensity.
     pub energy: f32,
+    /// Energy at the origin (J), before falloff.
+    pub emitted: f32,
+    /// True for rays from a player's emit command; drawn even when they hit nothing.
+    pub beam: bool,
 }

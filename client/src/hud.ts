@@ -27,20 +27,15 @@ export class Hud {
   private bindPanel: HTMLDivElement;
   private bindList: HTMLDivElement;
   private capturingKey = false;
+  /** Action waiting for the player to click its block on the ship. */
+  private pickingFor: BindAction | null = null;
 
   private binds: Bind[];
   private onBindsChanged: (binds: Bind[]) => void;
-  private getSelectedCell: () => Cell | null;
 
-  constructor(
-    parent: HTMLElement,
-    initialBinds: Bind[],
-    onBindsChanged: (binds: Bind[]) => void,
-    getSelectedCell: () => Cell | null,
-  ) {
+  constructor(parent: HTMLElement, initialBinds: Bind[], onBindsChanged: (binds: Bind[]) => void) {
     this.binds = initialBinds;
     this.onBindsChanged = onBindsChanged;
-    this.getSelectedCell = getSelectedCell;
 
     this.root = document.createElement("div");
     this.root.className = "hud";
@@ -122,6 +117,25 @@ export class Hud {
 
   toggleBindEditor(): void {
     this.bindPanel.classList.toggle("hidden");
+    this.cancelBlockPick();
+  }
+
+  isPickingBlock(): boolean {
+    return this.pickingFor != null;
+  }
+
+  /** Complete a "pick block" started in the bind editor with the clicked cell. */
+  finishBlockPick(cell: Cell): void {
+    if (!this.pickingFor) return;
+    this.pickingFor.block = [cell[0], cell[1]];
+    this.pickingFor = null;
+    this.commit();
+  }
+
+  cancelBlockPick(): void {
+    if (!this.pickingFor) return;
+    this.pickingFor = null;
+    this.renderBindEditor();
   }
 
   isBindEditorOpen(): boolean {
@@ -175,6 +189,7 @@ export class Hud {
     resetBtn.textContent = "reset to defaults";
     resetBtn.addEventListener("click", () => {
       this.binds = JSON.parse(JSON.stringify(DEFAULT_BINDS)) as Bind[];
+      this.pickingFor = null;
       this.commit();
     });
     this.bindList.appendChild(resetBtn);
@@ -214,16 +229,18 @@ export class Hud {
     const row = document.createElement("div");
     row.className = "action-row";
 
-    const iInput = numberInput(action.block[0], (v) => {
-      action.block = [v, action.block[1]];
-      this.commit();
+    const picking = this.pickingFor === action;
+    const blockLabel = document.createElement("span");
+    blockLabel.textContent = `block [${action.block[0]}, ${action.block[1]}]`;
+    row.appendChild(blockLabel);
+
+    const pickBtn = document.createElement("button");
+    pickBtn.textContent = picking ? "click a block... (Esc)" : "pick a block";
+    pickBtn.addEventListener("click", () => {
+      this.pickingFor = picking ? null : action;
+      this.renderBindEditor();
     });
-    const jInput = numberInput(action.block[1], (v) => {
-      action.block = [action.block[0], v];
-      this.commit();
-    });
-    row.appendChild(labelWrap("i", iInput));
-    row.appendChild(labelWrap("j", jInput));
+    row.appendChild(pickBtn);
 
     const dirSelect = document.createElement("select");
     for (const d of DIRS) {
@@ -251,21 +268,11 @@ export class Hud {
     });
     row.appendChild(labelWrap("mass", massInput));
 
-    const useSelectedBtn = document.createElement("button");
-    useSelectedBtn.textContent = "use selected block";
-    useSelectedBtn.addEventListener("click", () => {
-      const cell = this.getSelectedCell();
-      if (cell) {
-        action.block = [cell[0], cell[1]];
-        this.commit();
-      }
-    });
-    row.appendChild(useSelectedBtn);
-
     const removeBtn = document.createElement("button");
     removeBtn.textContent = "x";
     removeBtn.title = "remove action";
     removeBtn.addEventListener("click", () => {
+      if (picking) this.pickingFor = null;
       bind.actions = bind.actions.filter((a) => a !== action);
       this.commit();
     });

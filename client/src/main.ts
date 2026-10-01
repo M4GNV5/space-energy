@@ -61,14 +61,9 @@ function startGame(name: string): void {
   let controlledShip: ShipId | null = null;
   let binds: Bind[] = loadBinds();
 
-  const hud: Hud = new Hud(
-    app,
-    binds,
-    (b) => {
-      binds = b;
-    },
-    () => input.getSource()?.cell ?? null,
-  );
+  const hud: Hud = new Hud(app, binds, (b) => {
+    binds = b;
+  });
 
   const useMock = new URLSearchParams(location.search).get("mock") === "1";
 
@@ -174,6 +169,7 @@ function startGame(name: string): void {
       }
     }
     input.maybeSendView(now);
+    input.refreshHover();
 
     render(ctx, canvas.clientWidth, canvas.clientHeight, cam, game, poses, now, {
       ownerName: name,

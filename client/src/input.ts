@@ -33,6 +33,7 @@ export class InputController {
   private lastSentView: { x: number; y: number; r: number } | null = null;
   private lastViewSentAt = 0;
   private tooltipEl: HTMLDivElement;
+  private lastMouse: { x: number; y: number } | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -55,6 +56,11 @@ export class InputController {
   }
   getBuildTargetCell(): Cell | null {
     return this.buildTargetCell;
+  }
+
+  /** Call once per frame: re-picks under the cursor so hover and tooltip track the latest state. */
+  refreshHover(): void {
+    if (this.lastMouse) this.updateHover(this.lastMouse.x, this.lastMouse.y);
   }
 
   /** Call once per frame; throttles `view` messages to ~5/s. */
@@ -126,7 +132,8 @@ export class InputController {
       this.cam.y += dy / this.cam.zoom;
       this.follow = false;
     }
-    this.updateHover(e);
+    this.lastMouse = { x: e.clientX, y: e.clientY };
+    this.updateHover(e.clientX, e.clientY);
   }
 
   private onMouseUp(e: MouseEvent): void {
@@ -142,6 +149,16 @@ export class InputController {
     const game = this.ctx.getGame();
     const myName = this.ctx.getMyName();
     const poses = computePoses(game, performance.now());
+
+    if (this.hud.isPickingBlock()) {
+      const pick = pickShipAt(game.ships, poses, wx, wy);
+      if (pick && pick.block && pick.ship.id === this.ctx.getControlledShip()) {
+        this.hud.finishBlockPick(pick.cell);
+      } else {
+        this.hud.toast("click a block of your controlled ship (Esc to cancel)");
+      }
+      return;
+    }
 
     if (this.source) {
       const ship = game.find(this.source.ship);
@@ -165,8 +182,8 @@ export class InputController {
     this.buildTargetCell = null;
   }
 
-  private updateHover(e: MouseEvent): void {
-    const [wx, wy] = this.toWorld(e.clientX, e.clientY);
+  private updateHover(clientX: number, clientY: number): void {
+    const [wx, wy] = this.toWorld(clientX, clientY);
     const game = this.ctx.getGame();
     const poses = computePoses(game, performance.now());
     const pick = pickShipAt(game.ships, poses, wx, wy);
@@ -180,7 +197,7 @@ export class InputController {
       this.buildTargetCell = null;
     }
 
-    this.updateTooltip(e.clientX, e.clientY);
+    this.updateTooltip(clientX, clientY);
   }
 
   private updateTooltip(clientX: number, clientY: number): void {
@@ -231,6 +248,7 @@ export class InputController {
       return;
     }
     if (key === "escape") {
+      this.hud.cancelBlockPick();
       this.clearSource();
       return;
     }

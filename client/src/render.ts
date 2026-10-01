@@ -15,6 +15,8 @@ export interface RenderOptions {
 }
 
 const BLOCK_COLLAPSE_PX = 2;
+/** Server tick length in seconds. */
+const TICK_S = 0.04;
 
 export function computePoses(game: GameState, now: number): Map<ShipId, Pose> {
   const dt = (now - game.receivedAt) / 1000;
@@ -46,6 +48,20 @@ export function render(
   for (const packet of game.packets) {
     const [sx, sy] = worldToScreen(cam, cx, cy, packet.x, packet.y);
     const r = Math.max(1.5, Math.min(4, cam.zoom * 0.15));
+    // Streak back over the distance travelled in one tick, so the packets of a
+    // continuous emission join up into a line.
+    const [tx, ty] = worldToScreen(cam, cx, cy, packet.x - packet.vx * TICK_S, packet.y - packet.vy * TICK_S);
+    if (Math.hypot(tx - sx, ty - sy) > 2 * r) {
+      ctx.strokeStyle = MATERIALS[packet.m].color;
+      ctx.lineWidth = r;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+      ctx.lineCap = "butt";
+      continue;
+    }
     ctx.fillStyle = MATERIALS[packet.m].color;
     ctx.beginPath();
     ctx.arc(sx, sy, r, 0, Math.PI * 2);
@@ -68,7 +84,9 @@ export function render(
     const age = now - inst.bornAt;
     const lifeFrac = 1 - age / 150;
     if (lifeFrac <= 0) continue;
-    const intensity = Math.max(0, Math.log10(inst.ray.energy + 1));
+    // Player beams are drawn by emitted energy, so they show even on a miss.
+    const energy = inst.ray.beam ? inst.ray.emitted : inst.ray.energy;
+    const intensity = Math.max(0, Math.log10(energy + 1));
     const alpha = Math.min(1, intensity / 6) * lifeFrac;
     if (alpha <= 0) continue;
     const width_ = Math.max(0.5, Math.min(4, intensity * 0.6));

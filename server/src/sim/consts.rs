@@ -102,7 +102,7 @@ pub const BURST_PACKETS: usize = 8;
 pub const BURST_SPEED: f32 = 5.0;
 
 // --- Uranium ---
-pub const URANIUM_KG_PER_TICK: f32 = 0.0004;
+pub const URANIUM_KG_PER_TICK: f32 = 0.0016;
 pub const URANIUM_J_PER_KG: f32 = 5.0e6;
 
 // --- Movement helper (temporary until player scripting) ---
@@ -132,6 +132,13 @@ pub const ASTEROID_BLOCKS_MAX: usize = 15;
 pub const ASTEROID_SPEED_MAX: f32 = 2.0;
 /// Max angular speed of a freshly spawned asteroid (rad/s). Added for M3.
 pub const ASTEROID_SPIN_MAX: f32 = 0.3;
+/// Energy every asteroid block radiates away per tick (J), so sunlight alone
+/// does not burst asteroids. A flat rate: it cancels weak sunlight but an
+/// N-block asteroid only shrugs off N times this much laser power.
+pub const ASTEROID_COOLING: f32 = 200.0;
+/// Conduction inside asteroids is scaled by this (loose rock conducts badly),
+/// so laser heat stays near the block that was hit instead of spreading out.
+pub const ASTEROID_CONDUCTION: f32 = 0.1;
 
 /// Max radius a client may request in `view` (m).
 pub const MAX_VIEW_RADIUS: f32 = 3000.0;

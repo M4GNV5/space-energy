@@ -93,10 +93,10 @@ export class MockNet implements NetLike {
       ships: [ship, asteroid],
       suns: [{ x: 0, y: 0, radius: 8 }],
       packets: [
-        { x: 25 + Math.sin(this.t) * 2, y: -5, m: "lead", mass: 50 },
-        { x: 27, y: -12, m: "iron", mass: 20 },
+        { x: 25 + Math.sin(this.t) * 2, y: -5, vx: 0, vy: 0, m: "lead", mass: 50 },
+        { x: 27, y: -12, vx: 0, vy: 0, m: "iron", mass: 20 },
       ],
-      rays: [{ x1: ship.x, y1: ship.y + 1.5, x2: ship.x, y2: ship.y + 40, energy: 50000 }],
+      rays: [{ x1: ship.x, y1: ship.y + 1.5, x2: ship.x, y2: ship.y + 40, energy: 50000, emitted: 50000, beam: true }],
     };
     this.handlers.onState(msg);
   }

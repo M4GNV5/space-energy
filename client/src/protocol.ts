@@ -79,6 +79,9 @@ export interface SunView {
 export interface PacketView {
   x: number;
   y: number;
+  /** Velocity (m/s), used to draw fast packets as streaks. */
+  vx: number;
+  vy: number;
   m: Material;
   mass: number;
 }
@@ -90,4 +93,8 @@ export interface RayView {
   y2: number;
   /** Energy delivered at the end point (J), for line intensity. */
   energy: number;
+  /** Energy at the origin (J), before falloff. */
+  emitted: number;
+  /** True for rays from a player's emit command; drawn even when they hit nothing. */
+  beam: boolean;
 }

@@ -197,6 +197,7 @@ impl World {
         energy: f32,
         ignore_block: Option<(ShipId, Cell)>,
         ignore_sun: Option<usize>,
+        beam: bool,
     ) {
         let max_dist = max_ray_range();
         let hit = ray::raycast(&self.ships, suns, origin, dir, max_dist, ignore_block, ignore_sun);
@@ -213,11 +214,11 @@ impl World {
                         }
                     }
                 }
-                self.rays.push(RayView { x1: origin[0], y1: origin[1], x2: h.point[0], y2: h.point[1], energy: delivered });
+                self.rays.push(RayView { x1: origin[0], y1: origin[1], x2: h.point[0], y2: h.point[1], energy: delivered, emitted: energy, beam });
             }
             None => {
                 let end = [origin[0] + dir[0] * max_dist, origin[1] + dir[1] * max_dist];
-                self.rays.push(RayView { x1: origin[0], y1: origin[1], x2: end[0], y2: end[1], energy: 0.0 });
+                self.rays.push(RayView { x1: origin[0], y1: origin[1], x2: end[0], y2: end[1], energy: 0.0, emitted: energy, beam });
             }
         }
     }
@@ -304,7 +305,7 @@ impl World {
                     let world_origin = local_to_world_raw(ship_pos, ship_rot, ship_com, center_local);
                     for d in dirs {
                         let world_dir = rotate(ship_rot, d);
-                        self.cast_and_apply_ray(suns, world_origin, world_dir, per, Some((ship_id, cell)), None);
+                        self.cast_and_apply_ray(suns, world_origin, world_dir, per, Some((ship_id, cell)), None, true);
                     }
                 }
                 _ => {
@@ -312,7 +313,7 @@ impl World {
                     let local_origin = face_offset(cell, dir).unwrap();
                     let world_origin = local_to_world_raw(ship_pos, ship_rot, ship_com, local_origin);
                     let world_dir = rotate(ship_rot, local_dir);
-                    self.cast_and_apply_ray(suns, world_origin, world_dir, energy_amt, Some((ship_id, cell)), None);
+                    self.cast_and_apply_ray(suns, world_origin, world_dir, energy_amt, Some((ship_id, cell)), None, true);
                 }
             }
         }
@@ -358,13 +359,14 @@ impl World {
                 let angle: f32 = self.rng.random_range(0.0..std::f32::consts::TAU);
                 let (s, c) = angle.sin_cos();
                 let origin = [sun.x + sun.radius * c, sun.y + sun.radius * s];
-                self.cast_and_apply_ray(suns, origin, [c, s], per, None, Some(i));
+                self.cast_and_apply_ray(suns, origin, [c, s], per, None, Some(i), false);
             }
         }
     }
 
     fn apply_conduction(&mut self) {
         for ship in self.ships.values_mut() {
+            let scale = if ship.owner.is_none() { consts::ASTEROID_CONDUCTION } else { 1.0 };
             let snapshot: Vec<(Cell, Material, f32)> = ship.blocks.iter().map(|(&c, b)| (c, b.material, b.energy)).collect();
             let mut deltas: HashMap<Cell, f32> = HashMap::new();
             for &(cell, material, energy) in &snapshot {
@@ -377,7 +379,7 @@ impl World {
                         let cap_b = consts::props(nb.material).energy_capacity;
                         let cond_b = consts::props(nb.material).conductance;
                         let fill_b = nb.energy / cap_b;
-                        let k = cond_a.min(cond_b);
+                        let k = cond_a.min(cond_b) * scale;
                         let flow = k * (fill_a - fill_b) * cap_a.min(cap_b) / 2.0;
                         *deltas.entry(cell).or_insert(0.0) -= flow;
                         *deltas.entry(ncell).or_insert(0.0) += flow;
@@ -388,6 +390,14 @@ impl World {
                 if let Some(b) = ship.blocks.get_mut(&cell) {
                     b.energy = (b.energy + d).max(0.0);
                 }
+            }
+        }
+    }
+
+    fn apply_asteroid_cooling(&mut self) {
+        for ship in self.ships.values_mut().filter(|s| s.owner.is_none()) {
+            for block in ship.blocks.values_mut() {
+                block.energy = (block.energy - consts::ASTEROID_COOLING).max(0.0);
             }
         }
     }
@@ -449,7 +459,7 @@ impl World {
             let edirs = self.omni_dirs(consts::OMNI_RAYS);
             let e_per = e.energy / consts::OMNI_RAYS as f32;
             for d in &edirs {
-                self.cast_and_apply_ray(suns, e.world_point, *d, e_per, None, None);
+                self.cast_and_apply_ray(suns, e.world_point, *d, e_per, None, None, false);
             }
         }
     }
@@ -529,6 +539,7 @@ impl World {
         }
         self.apply_sun_emissions(&suns);
         self.apply_conduction();
+        self.apply_asteroid_cooling();
         self.process_bursts(&suns);
         self.integrate();
         self.step_packets();
@@ -692,6 +703,32 @@ mod tests {
         w.process_emit(&[], 1, [1, 0], Dir::N, 0.0, 1.0);
 
         assert_ne!(w.ships[&1].omega, 0.0, "off-centre thrust should spin the ship");
+    }
+
+    #[test]
+    fn asteroids_cool_passively_but_player_ships_do_not() {
+        let mut w = World::new(1);
+        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
+        single_block_ship(&mut w, 2, [50.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
+        w.ships.get_mut(&2).unwrap().owner = Some("p".into());
+
+        w.apply_asteroid_cooling();
+
+        approx(w.ships[&1].blocks[&[0, 0]].energy, 1_000_000.0 - consts::ASTEROID_COOLING, 1.0);
+        approx(w.ships[&2].blocks[&[0, 0]].energy, 1_000_000.0, 1e-3);
+    }
+
+    #[test]
+    fn missed_player_beam_is_still_reported() {
+        let mut w = World::new(1);
+        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
+
+        w.process_emit(&[], 1, [0, 0], Dir::E, 100_000.0, 0.0);
+
+        let ray = w.rays.last().expect("a ray was recorded");
+        assert!(ray.beam);
+        approx(ray.emitted, 100_000.0, 1.0);
+        approx(ray.energy, 0.0, 1e-6);
     }
 
     #[test]

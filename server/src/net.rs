@@ -228,7 +228,7 @@ pub async fn run_game_loop(server: SharedServer) {
                 .packets
                 .iter()
                 .filter(|p| dist(p.pos, center) <= r)
-                .map(|p| PacketView { x: p.pos[0], y: p.pos[1], m: p.material, mass: p.mass })
+                .map(|p| PacketView { x: p.pos[0], y: p.pos[1], vx: p.vel[0], vy: p.vel[1], m: p.material, mass: p.mass })
                 .collect();
             let rays: Vec<RayView> = s
                 .world
