@@ -11,7 +11,7 @@
 //   `[x, y] + rotate(rot) * (p - com)`.
 // - Face directions are ship-local: n = +y, e = +x, s = -y, w = -x.
 
-export type Material = "iron" | "copper" | "lead" | "plastic" | "tungsten" | "uranium" | "silicon";
+export type Material = "iron" | "copper" | "lead" | "plastic" | "tungsten" | "uranium" | "silicon" | "rock";
 export type Dir = "n" | "e" | "s" | "w" | "all";
 export type ShipId = number;
 export type Cell = [number, number];
@@ -25,6 +25,7 @@ export const MATERIALS: Record<Material, { maxMass: number; energyPerKg: number;
   tungsten: { maxMass: 19300, energyPerKg: 13000, color: "#3e8a7e" },
   uranium: { maxMass: 19000, energyPerKg: 4000, color: "#6fcf3f" },
   silicon: { maxMass: 2330, energyPerKg: 5000, color: "#3b5bb5" },
+  rock: { maxMass: 2700, energyPerKg: 300, color: "#4d443c" },
 };
 
 /** Energy (J) a block can hold before it bursts. Scales with its mass. */

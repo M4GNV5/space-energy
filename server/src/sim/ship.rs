@@ -230,8 +230,8 @@ impl Ship {
     }
 
     /// Collects nearby mass packets into this ship's blocks.
-    /// `block = None`: into all matching-material blocks, nearest first. What
-    /// does not fit becomes a new block in the free adjacent cell nearest to the
+    /// `block = None`: into all matching-material blocks, evening out their
+    /// masses (lightest first). What does not fit becomes a new block in the free adjacent cell nearest to the
     /// centre of mass.
     /// `block = Some(cell)`: only into that cell (creating it if empty and adjacent).
     pub fn apply_collect(
@@ -246,36 +246,39 @@ impl Ship {
                     if packet.mass <= 0.0 {
                         continue;
                     }
-                    let mut candidates: Vec<(f32, Cell)> = self
-                        .blocks
-                        .iter()
-                        .filter(|(_, b)| b.material == packet.material)
-                        .filter_map(|(&c, _)| {
-                            let wp = self.local_to_world([c[0] as f32, c[1] as f32]);
-                            let d = dist(wp, packet.pos);
-                            (d <= consts::COLLECT_RANGE).then_some((d, c))
-                        })
-                        .collect();
-                    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                    for (_, c) in candidates {
-                        if packet.mass <= 0.0 {
-                            break;
-                        }
-                        let max_mass = consts::props(packet.material).max_mass;
-                        let b = self.blocks.get_mut(&c).unwrap();
-                        let room = (max_mass - b.mass).max(0.0);
-                        let take = room.min(packet.mass);
-                        b.mass += take;
-                        packet.mass -= take;
-                    }
-                    if packet.mass < MIN_BLOCK_MASS {
-                        continue;
-                    }
+                    // In range of any block = in range of the ship: the mass may then go
+                    // into every matching block, also ones further away.
                     let in_range = self
                         .blocks
                         .keys()
                         .any(|c| dist(self.local_to_world([c[0] as f32, c[1] as f32]), packet.pos) <= consts::COLLECT_RANGE);
                     if !in_range {
+                        continue;
+                    }
+                    // Fill the lightest matching blocks first, raising them to a common
+                    // level, so the mass evens out over all blocks of that material.
+                    let max_mass = consts::props(packet.material).max_mass;
+                    let mut masses: Vec<f32> =
+                        self.blocks.values().filter(|b| b.material == packet.material).map(|b| b.mass).collect();
+                    masses.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    if let Some(&lightest) = masses.first() {
+                        let mut level = lightest;
+                        for i in 0..masses.len() {
+                            let target = masses.get(i + 1).copied().unwrap_or(max_mass).min(max_mass);
+                            let needed = (target - level).max(0.0) * (i + 1) as f32;
+                            if packet.mass <= needed {
+                                level += packet.mass / (i + 1) as f32;
+                                packet.mass = 0.0;
+                                break;
+                            }
+                            packet.mass -= needed;
+                            level = level.max(target);
+                        }
+                        for b in self.blocks.values_mut().filter(|b| b.material == packet.material && b.mass < level) {
+                            b.mass = level;
+                        }
+                    }
+                    if packet.mass < MIN_BLOCK_MASS {
                         continue;
                     }
                     let com_dist2 = |c: &Cell| (c[0] as f32 - self.com[0]).powi(2) + (c[1] as f32 - self.com[1]).powi(2);
@@ -443,6 +446,64 @@ mod tests {
         assert_eq!(copper.len(), 1);
         approx(copper[0].mass, 10.0, 1e-4);
         assert_eq!(packets.len(), 1);
+    }
+
+    #[test]
+    fn collect_fills_a_matching_block_that_is_itself_out_of_range() {
+        // The copper block is 20 m from the packet, the iron block right next to it.
+        let mut ship = Ship::new(1, None);
+        ship.blocks.insert([0, 0], Block::new(Material::Iron, 10.0, 0.0));
+        ship.blocks.insert([20, 0], Block::new(Material::Copper, 10.0, 0.0));
+        ship.recompute_com_inertia();
+        let pos = ship.local_to_world([-2.0, 0.0]);
+        let mut packets = vec![Packet { pos, vel: [0.0, 0.0], material: Material::Copper, mass: 5.0, age: 0.0 }];
+
+        ship.apply_collect(&mut packets, None, None).unwrap();
+
+        assert_eq!(ship.blocks.len(), 2, "no new block while a matching one has room");
+        approx(ship.blocks[&[20, 0]].mass, 15.0, 1e-4);
+    }
+
+    #[test]
+    fn collect_evens_out_the_masses_of_matching_blocks() {
+        let lead = |masses: &[f32], collected: f32| {
+            let mut ship = Ship::new(1, None);
+            for (i, &m) in masses.iter().enumerate() {
+                ship.blocks.insert([i as i32, 0], Block::new(Material::Lead, m, 0.0));
+            }
+            ship.recompute_com_inertia();
+            let pos = ship.local_to_world([0.0, 2.0]);
+            // Two packets, to check that the result does not depend on how the mass is split.
+            let packet = Packet { pos, vel: [0.0, 0.0], material: Material::Lead, mass: collected / 2.0, age: 0.0 };
+            let mut packets = vec![packet, packet];
+            ship.apply_collect(&mut packets, None, None).unwrap();
+            assert!(packets.is_empty());
+            (0..masses.len()).map(|i| ship.blocks[&[i as i32, 0]].mass).collect::<Vec<f32>>()
+        };
+        let after = lead(&[50.0, 100.0], 150.0);
+        approx(after[0], 150.0, 1e-3);
+        approx(after[1], 150.0, 1e-3);
+        // Too little to reach the heavier block: only the lighter one grows.
+        let after = lead(&[50.0, 100.0, 400.0], 30.0);
+        approx(after[0], 80.0, 1e-3);
+        approx(after[1], 100.0, 1e-3);
+        approx(after[2], 400.0, 1e-3);
+    }
+
+    #[test]
+    fn collect_overflows_full_blocks_into_a_new_one() {
+        let max = consts::props(Material::Lead).max_mass;
+        let mut ship = Ship::new(1, None);
+        ship.blocks.insert([0, 0], Block::new(Material::Lead, max - 10.0, 0.0));
+        ship.recompute_com_inertia();
+        let mut packets = vec![Packet { pos: [0.0, 2.0], vel: [0.0, 0.0], material: Material::Lead, mass: 60.0, age: 0.0 }];
+
+        ship.apply_collect(&mut packets, None, None).unwrap();
+
+        approx(ship.blocks[&[0, 0]].mass, max, 1e-2);
+        assert_eq!(ship.blocks.len(), 2);
+        let total: f32 = ship.blocks.values().map(|b| b.mass).sum();
+        approx(total, max + 50.0, 1e-2);
     }
 
     #[test]

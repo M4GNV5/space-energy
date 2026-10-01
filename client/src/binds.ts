@@ -15,7 +15,7 @@ export interface Bind {
 }
 
 /** Keys the bind editor must refuse: they have fixed meanings. */
-export const RESERVED_KEYS = new Set(["f", "c", "b", "tab", "escape"]);
+export const RESERVED_KEYS = new Set(["f", "c", "b", "r", "tab", "escape"]);
 
 // Cells refer to the starter ship: `STARTER_LAYOUT` in server/src/sim/worldgen.rs.
 export const DEFAULT_BINDS: Bind[] = [
@@ -48,6 +48,21 @@ export const DEFAULT_BINDS: Bind[] = [
     ],
   },
   {
+    // Strafe left: both right-hand thrusters push the ship sideways without turning it.
+    key: "q",
+    actions: [
+      { block: [2, 4], dir: "e", energy: 2000, mass: 2 },
+      { block: [2, -3], dir: "e", energy: 2000, mass: 2 },
+    ],
+  },
+  {
+    key: "e",
+    actions: [
+      { block: [-2, 4], dir: "w", energy: 2000, mass: 2 },
+      { block: [-2, -3], dir: "w", energy: 2000, mass: 2 },
+    ],
+  },
+  {
     // Laser at the nose tip.
     key: " ",
     actions: [{ block: [0, 10], dir: "n", energy: 100000, mass: 0 }],
@@ -69,7 +84,7 @@ export const DEFAULT_BINDS: Bind[] = [
 ];
 
 // Bump the version when the starter ship layout or the emit rules change, so stale binds are dropped.
-const STORAGE_KEY = "space-energy-binds-v3";
+const STORAGE_KEY = "space-energy-binds-v4";
 
 function cloneDefaults(): Bind[] {
   return JSON.parse(JSON.stringify(DEFAULT_BINDS)) as Bind[];

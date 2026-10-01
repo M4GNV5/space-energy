@@ -5,6 +5,7 @@ import type { Bind } from "./binds";
 import { escapeHtml, formatEnergy, formatMass } from "./format";
 import type { Hud } from "./hud";
 import type { NetLike } from "./net";
+import type { ScriptPanel } from "./scriptPanel";
 import { MATERIALS, energyCapacity, type Cell, type ShipId } from "./protocol";
 import type { GameState } from "./state";
 import { type BuildSelection, type PickResult, localCellForShip, pickShipAt } from "./ships";
@@ -16,6 +17,7 @@ export interface InputContext {
   getControlledShip: () => ShipId | null;
   cycleControlledShip: () => void;
   getBinds: () => Bind[];
+  scriptPanel: ScriptPanel;
 }
 
 const EMIT_INTERVAL_MS = 40;
@@ -246,7 +248,19 @@ export class InputController {
       return;
     }
     if (key === "b") {
-      if (!e.repeat) this.hud.toggleBindEditor();
+      if (!e.repeat) {
+        this.ctx.scriptPanel.close();
+        this.hud.toggleBindEditor();
+      }
+      return;
+    }
+    if (key === "r") {
+      if (!e.repeat) {
+        if (this.hud.isBindEditorOpen()) this.hud.toggleBindEditor();
+        this.ctx.scriptPanel.toggle();
+      }
+      // Otherwise the key press would also be typed into the editor that just got focus.
+      e.preventDefault();
       return;
     }
     if (key === "escape") {

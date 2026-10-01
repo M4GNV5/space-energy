@@ -51,6 +51,7 @@ Each material has a maximum mass, an energy capacity per kg, a conductance (ener
 | tungsten | highest energy capacity per kg and per block (battery, armor that is hard to burst) |
 | uranium | each tick converts mass into energy at a configurable rate. No control, no meltdown. Inert while part of an asteroid |
 | silicon | switchable one-way conductor: energy flows in from the block behind it and out to the block ahead, nothing to the sides. A perfect isolator until pointed |
+| rock | asteroid filler. Energy isolator with a very low energy capacity, so it bursts easily. Leaves no mass packets when it bursts, so it cannot be collected or built |
 | gold | reflects incoming energy rays instead of absorbing them (mirror). *Post-MVP* |
 | sun | only used by suns. Infinite, indestructible, continuously emits energy in all directions, absorbs incoming energy. Cannot be built. *MVP: a sun is a single disk (radius 100–300 m; its power scales with the radius), not a grid of blocks* |
 
@@ -66,8 +67,8 @@ Control signals: there is no separate "switch" command. An emit command that req
 
 ### Obtaining Mass
 When a block bursts, it releases all of its mass as packets.
-Any ship can collect nearby packets (within `COLLECT_RANGE`) into any of its blocks with a matching material, or into an adjacent empty cell (which creates a new block of that material).
-A collect without a target cell fills matching blocks first. Mass that does not fit (no block of that material, or all of them full) becomes a new block in the free adjacent cell nearest to the ship's centre of mass.
+Any ship can collect nearby packets (within `COLLECT_RANGE` of any of its blocks) into any of its blocks with a matching material, or into an adjacent empty cell (which creates a new block of that material).
+A collect without a target cell fills matching blocks first, lightest first, so their masses even out: two lead blocks at 50 kg and 100 kg that collect 150 kg both end at 150 kg. Mass that does not fit (no block of that material, or all of them full) becomes a new block in the free adjacent cell nearest to the ship's centre of mass.
 Mining = shooting asteroids with energy until their blocks burst, then collecting the mass.
 
 ### Ships and Physics
@@ -79,9 +80,10 @@ Mining = shooting asteroids with energy until their blocks burst, then collectin
 - A ship with no blocks left is removed.
 
 ### World
-- The world is infinite and is generated from a seed given at server start. Nothing is persisted.
+- The world is infinite and is generated from a seed given at server start.
+- Player ships and the player list are saved to a file (`SAVE_FILE`, default `save.json`) every 3 minutes and on Ctrl-C, and loaded at server start together with the seed. Asteroids and mass packets are not saved.
 - Suns are deterministic per chunk (`CHUNK_SIZE`) based on the seed. They are static, infinite and have no gravity (for now).
-- Asteroids (unowned ships of 40–300 blocks, with materials in veins) spawn randomly around active players all the time, and despawn when no player is near.
+- Asteroids (unowned ships of 120–900 blocks: mostly rock, with about 15% minerals in small deposits — clumps or straight lines of 2–10 blocks of one material) spawn randomly around active players all the time, and despawn when no player is near.
 
 ### Players
 - Login by username only (no password for now). Typing an existing name gives control of that player's ships.
@@ -112,9 +114,22 @@ The browser-based frontend should:
 - show ship/block information on hover (material, `mass 5/9000 kg`, `energy 120/5000 J`)
 - allow building ships: click a mass source block first, then a target block or empty cell
 - allow binding keys to commands (e.g. bind "WASD" to emitting mass from specific blocks)
+- allow scripting ships (see Scripts)
+
+### Scripts
+Each ship can have one script (JavaScript), written in the in-game editor (`R`). Scripts run in the browser of the owning player, not on the server: a script only runs while its owner is connected, and it issues the same commands a player could send by hand.
+- A script defines `setup()` (runs once at start) and `loop()` (runs once per server tick).
+- It sees its own ship (`ship`: pose, velocity, blocks) and the nearby universe (`world`: other ships and asteroids, suns, packets, rays). "Nearby" is what the server sends to the client, i.e. what the camera sees. While the ship itself is out of view, its `loop()` is paused.
+- `ship.selectedBlock` is the block of the ship the player has clicked (the build-mode source block), or `undefined`.
+- Commands: `ship.emit(cell, dir, energy, mass)`, `ship.moveMass(from, to, kg)`, `ship.collect(cell?, material?)`.
+- Menu: `menu.button(label, onClick)` adds a button to the HUD of the ship (e.g. "stabilize": thrust against the current motion until the ship is at rest). Buttons can be relabelled, highlighted and removed by the script.
+- `log(...)` prints to the editor, `toast(...)` shows a popup in the top right (where server errors appear).
+- Each script runs in its own web worker. A script that throws, or does not finish within 1 s, is stopped and its error is shown.
+- Scripts are stored in the browser (localStorage) per player and ship. A started script starts again after a reload.
+- Key binds keep working next to scripts.
 
 ### Later
-- Player-written code controlling ships (flight control, cooling, automation)
+- Scripts running on the server (ships keep working while the owner is offline), key input for scripts
 - Collisions, ship splitting
 - Gold, signals between ships
 - PvP goals, proper authentication, persistence

@@ -37,6 +37,7 @@ pub fn props(m: Material) -> &'static MaterialProps {
         Material::Tungsten => &TUNGSTEN,
         Material::Uranium => &URANIUM,
         Material::Silicon => &SILICON,
+        Material::Rock => &ROCK,
     }
 }
 
@@ -94,6 +95,16 @@ const SILICON: MaterialProps = MaterialProps {
     energy_per_kg: 5000.0,
     conductance: 0.2,
     isolator: false,
+    energy_emit_rate: 1_000.0,
+    mass_emit_rate: 1.0,
+};
+/// Asteroid filler: an isolator that bursts easily and leaves nothing behind,
+/// so the minerals inside an asteroid can be heated and reached one by one.
+const ROCK: MaterialProps = MaterialProps {
+    max_mass: 2700.0,
+    energy_per_kg: 300.0,
+    conductance: 0.002,
+    isolator: true,
     energy_emit_rate: 1_000.0,
     mass_emit_rate: 1.0,
 };
@@ -163,15 +174,18 @@ pub const ASTEROIDS_PER_PLAYER: usize = 12;
 pub const ASTEROID_SPAWN_MIN: f32 = 200.0;
 pub const ASTEROID_SPAWN_MAX: f32 = 900.0;
 pub const ASTEROID_DESPAWN: f32 = 1800.0;
-pub const ASTEROID_BLOCKS_MIN: usize = 40;
-pub const ASTEROID_BLOCKS_MAX: usize = 300;
+pub const ASTEROID_BLOCKS_MIN: usize = 120;
+pub const ASTEROID_BLOCKS_MAX: usize = 900;
 /// Asteroid blocks spawn with a random fraction of their material's max mass
 /// in this range. Kept low so their energy capacity stays laser-sized.
 pub const ASTEROID_MASS_FRAC_MIN: f32 = 0.02;
 pub const ASTEROID_MASS_FRAC_MAX: f32 = 0.15;
-/// Chance that a new asteroid block copies the material of the block it grew
-/// from, which makes materials form veins instead of noise.
-pub const ASTEROID_VEIN_CHANCE: f64 = 0.85;
+/// Fraction of an asteroid's blocks that are minerals; the rest is rock.
+pub const ASTEROID_MINERAL_FRACTION: f32 = 0.15;
+/// Minerals sit in deposits (a clump or a straight line) of this many blocks
+/// of one material.
+pub const ASTEROID_DEPOSIT_MIN: usize = 2;
+pub const ASTEROID_DEPOSIT_MAX: usize = 10;
 /// Asteroids do not spawn closer than this to a sun's surface (m).
 pub const ASTEROID_SUN_MARGIN: f32 = 50.0;
 pub const ASTEROID_SPEED_MAX: f32 = 2.0;

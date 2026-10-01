@@ -22,6 +22,8 @@ pub enum Material {
     Tungsten,
     Uranium,
     Silicon,
+    /// Asteroid filler. Leaves no mass packets when it bursts.
+    Rock,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

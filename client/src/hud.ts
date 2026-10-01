@@ -85,7 +85,7 @@ export class Hud {
   }
 
   private helpLine(): string {
-    return `<div class="help">F follow · Tab switch ship · C collect · B binds · wheel zoom · right/middle drag pan</div>`;
+    return `<div class="help">F follow · Tab switch ship · C collect · B binds · R script · wheel zoom · right/middle drag pan</div>`;
   }
 
   getMoveKg(): number {

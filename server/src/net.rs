@@ -27,7 +27,7 @@ struct Conn {
 /// Everything behind one lock: the simulation plus connection/player bookkeeping.
 pub struct Server {
     pub world: World,
-    players: std::collections::HashSet<String>,
+    pub(crate) players: std::collections::HashSet<String>,
     connections: HashMap<u64, Conn>,
     next_conn_id: u64,
 }

@@ -1,5 +1,6 @@
 pub mod net;
 pub mod protocol;
+pub mod save;
 pub mod sim;
 
 pub use net::{run_game_loop, ws_handler, Server, SharedServer};

@@ -9,6 +9,8 @@ import { MockNet } from "./mock";
 import { Net, type NetHandlers, type NetLike } from "./net";
 import { energyCapacity, type ShipId, type StateMsg } from "./protocol";
 import { computePoses, render } from "./render";
+import { ScriptPanel } from "./scriptPanel";
+import { ScriptManager } from "./scripts";
 import { GameState } from "./state";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -91,6 +93,7 @@ function startGame(name: string): void {
     onState: (msg: StateMsg) => {
       game.apply(msg, performance.now());
       ensureControlledShip();
+      scripts.onState(msg);
     },
     onError: (msg) => hud.toast(msg),
     onClose: () => {
@@ -100,12 +103,25 @@ function startGame(name: string): void {
 
   const net: NetLike = useMock ? new MockNet(netHandlers) : new Net(netHandlers);
 
+  const scripts = new ScriptManager(
+    name,
+    (msg) => net.send(msg),
+    (ship) => scriptPanel.markDirty(ship),
+    (ship, text) => hud.toast(`#${ship}: ${text}`),
+    (ship) => {
+      const source = input.getSource();
+      return source && source.ship === ship ? source.cell : null;
+    },
+  );
+  const scriptPanel: ScriptPanel = new ScriptPanel(app, hud.root, scripts);
+
   const input: InputController = new InputController(canvas, cam, net, hud, {
     getGame: () => game,
     getMyName: () => name,
     getControlledShip: () => controlledShip,
     cycleControlledShip,
     getBinds: () => binds,
+    scriptPanel,
   });
 
   net.connect(name);
@@ -180,6 +196,7 @@ function startGame(name: string): void {
     });
 
     updateHud();
+    scriptPanel.update(controlledShip);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

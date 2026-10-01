@@ -520,6 +520,8 @@ impl World {
                     .collect()
             };
             let per_mass = e.mass / consts::BURST_PACKETS as f32;
+            // Rock crumbles to nothing.
+            let dirs = if e.material == Material::Rock { Vec::new() } else { dirs };
             for d in &dirs {
                 self.packets.push(Packet {
                     pos: e.world_point,
@@ -886,6 +888,18 @@ mod tests {
         approx(dv(2000.0, 0.5), 0.5 * dv(2000.0, 1.0), 1.0);
         // Mass without energy just drifts off.
         approx(dv(0.0, 1.0), 0.0, 1e-6);
+    }
+
+    #[test]
+    fn bursting_rock_leaves_no_packets() {
+        let mut w = World::new(1);
+        let mut s = Ship::new(1, None);
+        s.blocks.insert([0, 0], Block::new(Material::Rock, 100.0, 1.0e9));
+        s.recompute_com_inertia();
+        w.ships.insert(1, s);
+        w.process_bursts(&[]);
+        assert!(w.ships[&1].blocks.is_empty(), "rock should burst");
+        assert!(w.packets.is_empty(), "rock should not drop mass");
     }
 
     #[test]

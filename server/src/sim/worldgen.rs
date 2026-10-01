@@ -1,6 +1,6 @@
 //! Deterministic suns, asteroid spawning, and the starter ship layout.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rand::Rng;
 use rand::SeedableRng;
@@ -139,30 +139,80 @@ pub fn make_starter_ship(world: &mut World, owner: String) -> ShipId {
     id
 }
 
-/// Grows a random 4-connected blob of `n` cells starting at (0,0). Each new
-/// cell usually copies the material of the cell it grew from, so materials
-/// form veins.
-fn random_blob(rng: &mut ChaCha8Rng, n: usize) -> Vec<(Cell, Material)> {
-    let random_material = |rng: &mut ChaCha8Rng| ASTEROID_MATERIALS[rng.random_range(0..ASTEROID_MATERIALS.len())];
-    let mut cells: Vec<(Cell, Material)> = vec![([0, 0], random_material(rng))];
+const NEIGHBOURS: [Cell; 4] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+/// Grows a random 4-connected blob of `n` cells starting at (0,0).
+fn random_blob(rng: &mut ChaCha8Rng, n: usize) -> Vec<Cell> {
+    let mut cells: Vec<Cell> = vec![[0, 0]];
     let mut taken: HashSet<Cell> = HashSet::from([[0, 0]]);
-    let dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     let mut guard = 0;
     while cells.len() < n && guard < n * 100 {
         guard += 1;
-        let (base, base_material) = cells[rng.random_range(0..cells.len())];
-        let d = dirs[rng.random_range(0..4)];
+        let base = cells[rng.random_range(0..cells.len())];
+        let d = NEIGHBOURS[rng.random_range(0..4)];
         let cand = [base[0] + d[0], base[1] + d[1]];
         if taken.insert(cand) {
-            let material =
-                if rng.random_bool(consts::ASTEROID_VEIN_CHANCE) { base_material } else { random_material(rng) };
-            cells.push((cand, material));
+            cells.push(cand);
         }
     }
     cells
 }
 
-const ASTEROID_MATERIALS: [Material; 7] = [
+/// Turns rock cells into one mineral deposit of up to `size` cells, starting at
+/// `start`: either a straight line or a clump. Only rock is replaced, so the
+/// deposit may end up smaller. Returns the number of cells it got.
+fn place_deposit(rng: &mut ChaCha8Rng, blob: &mut HashMap<Cell, Material>, start: Cell, material: Material, size: usize) -> usize {
+    let is_rock = |blob: &HashMap<Cell, Material>, c: &Cell| blob.get(c) == Some(&Material::Rock);
+    if !is_rock(blob, &start) {
+        return 0;
+    }
+    blob.insert(start, material);
+    let mut deposit = vec![start];
+    if rng.random_bool(0.5) {
+        let d = NEIGHBOURS[rng.random_range(0..4)];
+        while deposit.len() < size {
+            let last = deposit[deposit.len() - 1];
+            let next = [last[0] + d[0], last[1] + d[1]];
+            if !is_rock(blob, &next) {
+                break;
+            }
+            blob.insert(next, material);
+            deposit.push(next);
+        }
+    } else {
+        let mut guard = 0;
+        while deposit.len() < size && guard < size * 20 {
+            guard += 1;
+            let base = deposit[rng.random_range(0..deposit.len())];
+            let d = NEIGHBOURS[rng.random_range(0..4)];
+            let next = [base[0] + d[0], base[1] + d[1]];
+            if is_rock(blob, &next) {
+                blob.insert(next, material);
+                deposit.push(next);
+            }
+        }
+    }
+    deposit.len()
+}
+
+/// A rock blob of `n` cells with small mineral deposits in it.
+fn asteroid_cells(rng: &mut ChaCha8Rng, n: usize) -> Vec<(Cell, Material)> {
+    let cells = random_blob(rng, n);
+    let mut blob: HashMap<Cell, Material> = cells.iter().map(|&c| (c, Material::Rock)).collect();
+    let target = (cells.len() as f32 * consts::ASTEROID_MINERAL_FRACTION) as usize;
+    let mut minerals = 0;
+    let mut guard = 0;
+    while minerals < target && guard < cells.len() {
+        guard += 1;
+        let start = cells[rng.random_range(0..cells.len())];
+        let material = ASTEROID_MINERALS[rng.random_range(0..ASTEROID_MINERALS.len())];
+        let size = rng.random_range(consts::ASTEROID_DEPOSIT_MIN..=consts::ASTEROID_DEPOSIT_MAX);
+        minerals += place_deposit(rng, &mut blob, start, material, size);
+    }
+    cells.into_iter().map(|c| (c, blob[&c])).collect()
+}
+
+const ASTEROID_MINERALS: [Material; 7] = [
     Material::Iron,
     Material::Copper,
     Material::Lead,
@@ -175,7 +225,7 @@ const ASTEROID_MATERIALS: [Material; 7] = [
 /// Builds an unowned asteroid ship at `pos` with random blocks/mass/velocity/spin.
 pub fn build_asteroid(rng: &mut ChaCha8Rng, id: ShipId, pos: [f32; 2]) -> Ship {
     let n = rng.random_range(consts::ASTEROID_BLOCKS_MIN..=consts::ASTEROID_BLOCKS_MAX);
-    let cells = random_blob(rng, n);
+    let cells = asteroid_cells(rng, n);
 
     let mut ship = Ship::new(id, None);
     for (cell, material) in cells {
@@ -249,6 +299,20 @@ mod tests {
         assert!(energy(&world, spine) > spine_before, "spine should be fed by the reactor");
         assert!(energy(&world, bus) > bus_before, "engine bus should be fed by the reactor");
         assert_eq!(world.ships[&id].blocks.len(), 86, "nothing should burst while idling");
+    }
+
+    #[test]
+    fn asteroids_are_mostly_rock_with_some_minerals() {
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        for id in 0..20 {
+            let ship = build_asteroid(&mut rng, id, [0.0, 0.0]);
+            let n = ship.blocks.len();
+            assert!((consts::ASTEROID_BLOCKS_MIN..=consts::ASTEROID_BLOCKS_MAX).contains(&n));
+            let minerals = ship.blocks.values().filter(|b| b.material != Material::Rock).count();
+            let frac = minerals as f32 / n as f32;
+            assert!(minerals >= consts::ASTEROID_DEPOSIT_MIN, "asteroid without minerals");
+            assert!(frac < 0.3, "asteroid is {frac} minerals");
+        }
     }
 
     #[test]
