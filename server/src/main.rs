@@ -13,7 +13,7 @@ async fn main() {
         let seed: u64 = std::env::var("SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(rand::random);
         Server::new(seed)
     });
-    println!("world seed: {}, player ships: {}", server.world.seed, server.world.ships.len());
+    println!("world seed: {}, player ships: {}", server.world.seed, server.parked.len());
 
     let server: Arc<Mutex<Server>> = Arc::new(Mutex::new(server));
     tokio::spawn(run_game_loop(server.clone()));

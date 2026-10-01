@@ -1,6 +1,7 @@
 //! Persistence: player ships and the player list are written to a JSON file
 //! every `SAVE_INTERVAL` and read back at server start.
 //!
+//! Ships are loaded as parked: they enter the world when their owner logs in.
 //! Asteroids, mass packets and the rng state are not saved: suns come from the
 //! seed, and asteroids respawn around players on their own.
 
@@ -55,6 +56,7 @@ impl Server {
             .world
             .ships
             .values()
+            .chain(&self.parked)
             .filter_map(|s| {
                 let mut blocks: Vec<SavedBlock> = s
                     .blocks
@@ -88,7 +90,7 @@ impl Server {
             ship.vel = saved.vel;
             ship.omega = saved.omega;
             server.world.next_ship_id = server.world.next_ship_id.max(ship.id + 1);
-            server.world.ships.insert(ship.id, ship);
+            server.parked.push(ship);
         }
         server
     }
@@ -153,8 +155,9 @@ mod tests {
         assert_eq!(loaded.world.tick, server.world.tick);
         assert_eq!(loaded.world.next_ship_id, server.world.next_ship_id);
         assert_eq!(loaded.players, server.players);
-        assert_eq!(loaded.world.ships.len(), 1);
-        let (a, b) = (&server.world.ships[&id], &loaded.world.ships[&id]);
+        assert!(loaded.world.ships.is_empty(), "nobody is online after a load");
+        assert_eq!(loaded.parked.len(), 1);
+        let (a, b) = (&server.world.ships[&id], &loaded.parked[0]);
         assert_eq!(a.owner, b.owner);
         assert_eq!(a.pos, b.pos);
         assert_eq!(a.rot, b.rot);

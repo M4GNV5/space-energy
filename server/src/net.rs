@@ -28,13 +28,38 @@ struct Conn {
 pub struct Server {
     pub world: World,
     pub(crate) players: std::collections::HashSet<String>,
+    /// Ships of offline players. They leave the world when their owner's last
+    /// connection closes and come back, unchanged, at the next login.
+    pub parked: Vec<Ship>,
     connections: HashMap<u64, Conn>,
     next_conn_id: u64,
 }
 
 impl Server {
     pub fn new(seed: u64) -> Self {
-        Server { world: World::new(seed), players: std::collections::HashSet::new(), connections: HashMap::new(), next_conn_id: 1 }
+        Server { world: World::new(seed), players: std::collections::HashSet::new(), parked: Vec::new(), connections: HashMap::new(), next_conn_id: 1 }
+    }
+
+    /// Drops a connection. If it was the player's last one, their ships are parked.
+    fn disconnect(&mut self, conn_id: u64) {
+        let Some(name) = self.connections.remove(&conn_id).and_then(|c| c.name) else { return };
+        if self.connections.values().any(|c| c.name.as_deref() == Some(name.as_str())) {
+            return;
+        }
+        let ids: Vec<ShipId> =
+            self.world.ships.iter().filter(|(_, sh)| sh.owner.as_deref() == Some(name.as_str())).map(|(id, _)| *id).collect();
+        for id in ids {
+            self.parked.extend(self.world.ships.remove(&id));
+        }
+    }
+
+    /// Puts the parked ships of `name` back into the world.
+    fn unpark(&mut self, name: &str) {
+        let (theirs, rest) = std::mem::take(&mut self.parked).into_iter().partition(|sh| sh.owner.as_deref() == Some(name));
+        self.parked = rest;
+        for ship in theirs {
+            self.world.ships.insert(ship.id, ship);
+        }
     }
 }
 
@@ -73,10 +98,7 @@ async fn handle_socket(socket: WebSocket, server: SharedServer) {
         }
     }
 
-    {
-        let mut s = server.lock().unwrap();
-        s.connections.remove(&conn_id);
-    }
+    server.lock().unwrap().disconnect(conn_id);
     writer.abort();
 }
 
@@ -112,6 +134,7 @@ fn handle_client_msg(server: &SharedServer, conn_id: u64, text: &str) {
             }
             let first_time = !s.players.contains(&name);
             s.players.insert(name.clone());
+            s.unpark(&name);
             let mut ships: Vec<ShipId> =
                 s.world.ships.iter().filter(|(_, sh)| sh.owner.as_deref() == Some(name.as_str())).map(|(id, _)| *id).collect();
             if first_time {
@@ -248,7 +271,38 @@ pub async fn run_game_loop(server: SharedServer) {
             }
         }
         for id in dead {
-            s.connections.remove(&id);
+            s.disconnect(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connect(s: &mut Server, conn_id: u64, name: &str) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        s.connections.insert(conn_id, Conn { name: Some(name.into()), view: (0.0, 0.0, 1000.0), tx });
+        s.unpark(name);
+    }
+
+    #[test]
+    fn ships_are_parked_while_their_owner_is_offline() {
+        let mut s = Server::new(7);
+        let a = s.world.spawn_starter_ship("a".into());
+        let b = s.world.spawn_starter_ship("b".into());
+        connect(&mut s, 1, "a");
+        connect(&mut s, 2, "a");
+        connect(&mut s, 3, "b");
+
+        s.disconnect(1);
+        assert!(s.world.ships.contains_key(&a), "still online through the second connection");
+        s.disconnect(2);
+        assert!(!s.world.ships.contains_key(&a) && s.world.ships.contains_key(&b));
+        assert_eq!(s.parked.len(), 1);
+
+        connect(&mut s, 4, "a");
+        assert!(s.world.ships.contains_key(&a));
+        assert!(s.parked.is_empty());
     }
 }
