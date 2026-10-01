@@ -293,15 +293,13 @@ impl World {
         }
         let props = consts::props(material);
         let energy_amt = req_energy.max(0.0).min(energy0).min(props.energy_emit_rate);
-        let remaining_energy = (energy0 - energy_amt).max(0.0);
-        let max_mass_by_energy =
-            if consts::EMIT_ENERGY_PER_KG > 0.0 { remaining_energy / consts::EMIT_ENERGY_PER_KG } else { f32::INFINITY };
-        let mass_amt = req_mass.max(0.0).min(props.mass_emit_rate).min(mass0).min(max_mass_by_energy).max(0.0);
-        let energy_cost_mass = mass_amt * consts::EMIT_ENERGY_PER_KG;
+        let mass_amt = req_mass.max(0.0).min(props.mass_emit_rate).min(mass0);
+        // Energy emitted together with mass drives the exhaust instead of becoming a ray.
+        let exhaust_speed = energy_amt * consts::EXHAUST_SPEED_PER_J;
 
         if let Some(ship) = self.ships.get_mut(&ship_id) {
             if let Some(b) = ship.blocks.get_mut(&cell) {
-                b.energy -= energy_amt + energy_cost_mass;
+                b.energy -= energy_amt;
                 b.mass -= mass_amt;
             }
             let dead = ship.blocks.get(&cell).map(|b| b.mass <= 1e-6).unwrap_or(false);
@@ -311,7 +309,7 @@ impl World {
             ship.recompute_com_inertia();
         }
 
-        if energy_amt > 0.0 {
+        if energy_amt > 0.0 && mass_amt <= 0.0 {
             let center_local = [cell[0] as f32, cell[1] as f32];
             match dir {
                 Dir::All => {
@@ -344,8 +342,8 @@ impl World {
                     for d in dirs {
                         let world_dir = rotate(ship_rot, d);
                         let vel = [
-                            point_vel[0] + world_dir[0] * consts::EXHAUST_SPEED,
-                            point_vel[1] + world_dir[1] * consts::EXHAUST_SPEED,
+                            point_vel[0] + world_dir[0] * exhaust_speed,
+                            point_vel[1] + world_dir[1] * exhaust_speed,
                         ];
                         self.packets.push(Packet { pos: world_point, vel, material, mass: per, age: 0.0 });
                     }
@@ -354,11 +352,11 @@ impl World {
                     let local_dir = dir_vec(dir).unwrap();
                     let world_dir = rotate(ship_rot, local_dir);
                     let vel = [
-                        point_vel[0] + world_dir[0] * consts::EXHAUST_SPEED,
-                        point_vel[1] + world_dir[1] * consts::EXHAUST_SPEED,
+                        point_vel[0] + world_dir[0] * exhaust_speed,
+                        point_vel[1] + world_dir[1] * exhaust_speed,
                     ];
                     self.packets.push(Packet { pos: world_point, vel, material, mass: mass_amt, age: 0.0 });
-                    let impulse = [-mass_amt * consts::EXHAUST_SPEED * world_dir[0], -mass_amt * consts::EXHAUST_SPEED * world_dir[1]];
+                    let impulse = [-mass_amt * exhaust_speed * world_dir[0], -mass_amt * exhaust_speed * world_dir[1]];
                     if let Some(ship) = self.ships.get_mut(&ship_id) {
                         ship.apply_impulse(world_point, impulse);
                     }
@@ -382,48 +380,76 @@ impl World {
     fn apply_conduction(&mut self) {
         for ship in self.ships.values_mut() {
             let scale = if ship.owner.is_none() { consts::ASTEROID_CONDUCTION } else { 1.0 };
-            let mut deltas: HashMap<Cell, f32> = HashMap::new();
+            // (source, sink, energy). Sink `None` = the void.
+            let mut flows: Vec<(Cell, Option<Cell>, f32)> = Vec::new();
             for (&cell, a) in &ship.blocks {
                 let cap_a = a.energy_capacity();
                 let props_a = consts::props(a.material);
                 let fill_a = a.energy / cap_a;
-                for (dx, dy, pair_dir) in [(1, 0, Dir::E), (0, 1, Dir::N)] {
+                for (dx, dy, pair_dir) in [(1, 0, Dir::E), (0, 1, Dir::N), (-1, 0, Dir::W), (0, -1, Dir::S)] {
                     let ncell = [cell[0] + dx, cell[1] + dy];
-                    if let Some(nb) = ship.blocks.get(&ncell) {
-                        let cap_b = nb.energy_capacity();
-                        let props_b = consts::props(nb.material);
-                        let fill_b = nb.energy / cap_b;
-                        // The better conductor sets the rate, unless an isolator is involved.
-                        let k = if props_a.isolator || props_b.isolator {
-                            props_a.conductance.min(props_b.conductance)
-                        } else {
-                            props_a.conductance.max(props_b.conductance)
-                        } * scale;
-                        let flow = k * (fill_a - fill_b) * cap_a.min(cap_b) / 2.0;
-                        // Silicon only lets energy flow along its direction.
-                        let (a_fwd, a_back) = a.conduction_gate(pair_dir);
-                        let (b_fwd, b_back) = nb.conduction_gate(pair_dir);
-                        let allowed = if flow > 0.0 { a_fwd && b_fwd } else { a_back && b_back };
-                        if !allowed {
-                            continue;
+                    let Some(nb) = ship.blocks.get(&ncell) else {
+                        // Exposed face: conducts into the void. Silicon only when pointed at it.
+                        let flow = props_a.conductance * consts::VOID_CONDUCTANCE * fill_a * a.energy;
+                        if flow > 0.0 && a.conduction_gate(pair_dir).0 {
+                            flows.push((cell, None, flow));
                         }
-                        *deltas.entry(cell).or_insert(0.0) -= flow;
-                        *deltas.entry(ncell).or_insert(0.0) += flow;
+                        continue;
+                    };
+                    // Each pair once.
+                    if !matches!(pair_dir, Dir::E | Dir::N) {
+                        continue;
                     }
+                    let cap_b = nb.energy_capacity();
+                    let props_b = consts::props(nb.material);
+                    let diff = fill_a - nb.energy / cap_b;
+                    // The better conductor sets the rate, unless an isolator is involved.
+                    let k = if props_a.isolator || props_b.isolator {
+                        props_a.conductance.min(props_b.conductance)
+                    } else {
+                        props_a.conductance.max(props_b.conductance)
+                    } * scale;
+                    // Silicon only lets energy flow along its direction.
+                    let (a_fwd, a_back) = a.conduction_gate(pair_dir);
+                    let (b_fwd, b_back) = nb.conduction_gate(pair_dir);
+                    let allowed = if diff > 0.0 { a_fwd && b_fwd } else { a_back && b_back };
+                    if !allowed || diff == 0.0 {
+                        continue;
+                    }
+                    let (src, dst, src_energy) = if diff > 0.0 { (cell, ncell, a.energy) } else { (ncell, cell, nb.energy) };
+                    // The fuller block conducts a share of its energy that grows with the
+                    // difference, but never more than what equalises the two fill ratios.
+                    let equalise = diff.abs() * cap_a * cap_b / (cap_a + cap_b);
+                    flows.push((src, Some(dst), (k * diff.abs() * src_energy).min(equalise)));
                 }
+            }
+            // Limit each block's total outflow and inflow by its own conductance, so a
+            // poor conductor stays slow next to a good one, and many neighbours at once
+            // can neither drain a block below zero nor overfill it.
+            let mut out_sum: HashMap<Cell, f32> = HashMap::new();
+            let mut in_sum: HashMap<Cell, f32> = HashMap::new();
+            for &(src, dst, flow) in &flows {
+                *out_sum.entry(src).or_insert(0.0) += flow;
+                if let Some(dst) = dst {
+                    *in_sum.entry(dst).or_insert(0.0) += flow;
+                }
+            }
+            let mut deltas: HashMap<Cell, f32> = HashMap::new();
+            for (src, dst, flow) in flows {
+                let a = &ship.blocks[&src];
+                let mut limit = (consts::props(a.material).conductance * a.energy / out_sum[&src]).min(1.0);
+                if let Some(dst) = dst {
+                    let b = &ship.blocks[&dst];
+                    let room = (b.energy_capacity() - b.energy).max(0.0);
+                    limit = limit.min(consts::props(b.material).conductance * room / in_sum[&dst]);
+                    *deltas.entry(dst).or_insert(0.0) += flow * limit;
+                }
+                *deltas.entry(src).or_insert(0.0) -= flow * limit;
             }
             for (cell, d) in deltas {
                 if let Some(b) = ship.blocks.get_mut(&cell) {
                     b.energy = (b.energy + d).max(0.0);
                 }
-            }
-        }
-    }
-
-    fn apply_asteroid_cooling(&mut self) {
-        for ship in self.ships.values_mut().filter(|s| s.owner.is_none()) {
-            for block in ship.blocks.values_mut() {
-                block.energy = (block.energy - consts::ASTEROID_COOLING).max(0.0);
             }
         }
     }
@@ -437,6 +463,7 @@ impl World {
             energy: f32,
             world_point: [f32; 2],
             ship_vel: [f32; 2],
+            ship_rot: f32,
         }
         let mut events = Vec::new();
         for (&id, ship) in self.ships.iter() {
@@ -450,6 +477,7 @@ impl World {
                         energy: block.energy,
                         world_point: ship.local_to_world([cell[0] as f32, cell[1] as f32]),
                         ship_vel: ship.vel,
+                        ship_rot: ship.rot,
                     });
                 }
             }
@@ -470,7 +498,27 @@ impl World {
             }
         }
         for e in events {
-            let dirs = self.omni_dirs(consts::BURST_PACKETS);
+            // Mass only leaves through faces with no block behind them (blocks that
+            // burst in the same tick are already gone). Fully enclosed: all directions.
+            let free: Vec<[f32; 2]> = [Dir::N, Dir::E, Dir::S, Dir::W]
+                .into_iter()
+                .filter_map(dir_vec)
+                .filter(|d| {
+                    let ncell = [e.cell[0] + d[0] as i32, e.cell[1] + d[1] as i32];
+                    !self.ships.get(&e.ship_id).is_some_and(|s| s.blocks.contains_key(&ncell))
+                })
+                .collect();
+            let dirs: Vec<[f32; 2]> = if free.is_empty() {
+                self.omni_dirs(consts::BURST_PACKETS)
+            } else {
+                (0..consts::BURST_PACKETS)
+                    .map(|k| {
+                        let face = free[k % free.len()];
+                        let spread: f32 = self.rng.random_range(-std::f32::consts::FRAC_PI_4..std::f32::consts::FRAC_PI_4);
+                        rotate(e.ship_rot + spread, face)
+                    })
+                    .collect()
+            };
             let per_mass = e.mass / consts::BURST_PACKETS as f32;
             for d in &dirs {
                 self.packets.push(Packet {
@@ -574,7 +622,6 @@ impl World {
             speeds_before.into_iter().filter(|(id, before)| speed_of(&self.ships, id) > Some(*before)).map(|(id, _)| id).collect();
         self.apply_sun_emissions(&suns);
         self.apply_conduction();
-        self.apply_asteroid_cooling();
         self.process_bursts(&suns);
         self.integrate();
         self.step_packets();
@@ -601,23 +648,67 @@ mod tests {
         w.ships.insert(id, ship);
     }
 
-    #[test]
-    fn conduction_conserves_energy_and_flows_high_to_low() {
+    /// Fraction of its energy a copper block at `fill` conducts in one tick into an empty copper block.
+    fn copper_conducted_fraction(fill: f32) -> f32 {
         let mut w = World::new(1);
-        let mut ship = Ship::new(1, None);
-        ship.blocks.insert([0, 0], Block::new(Material::Copper, 100.0, 1_000_000.0));
+        let mut ship = Ship::new(1, Some("p".into()));
+        let mut src = Block::new(Material::Copper, 100.0, 0.0);
+        src.energy = src.energy_capacity() * fill;
+        ship.blocks.insert([0, 0], src);
         ship.blocks.insert([1, 0], Block::new(Material::Copper, 100.0, 0.0));
         ship.recompute_com_inertia();
         w.ships.insert(1, ship);
-        let total_before: f32 = w.ships[&1].blocks.values().map(|b| b.energy).sum();
 
         w.apply_conduction();
 
         let ship = &w.ships[&1];
-        let total_after: f32 = ship.blocks.values().map(|b| b.energy).sum();
-        approx(total_after, total_before, 1.0);
-        assert!(ship.blocks[&[0, 0]].energy < 1_000_000.0, "high-fill block should lose energy");
-        assert!(ship.blocks[&[1, 0]].energy > 0.0, "low-fill block should gain energy");
+        assert!(ship.blocks[&[0, 0]].energy + ship.blocks[&[1, 0]].energy <= src.energy, "conduction must not create energy");
+        ship.blocks[&[1, 0]].energy / src.energy
+    }
+
+    #[test]
+    fn conduction_grows_with_the_fill_difference() {
+        approx(copper_conducted_fraction(0.999), 0.5, 0.01);
+        approx(copper_conducted_fraction(0.5), 0.25, 0.01);
+        approx(copper_conducted_fraction(0.1), 0.05, 0.01);
+    }
+
+    #[test]
+    fn many_neighbours_neither_drain_nor_overfill_a_block() {
+        // A full copper block surrounded by four empty ones keeps half of its energy.
+        let cross = |centre: f32, arms: f32| {
+            let mut w = World::new(1);
+            let mut ship = Ship::new(1, Some("p".into()));
+            let cap = Block::new(Material::Copper, 100.0, 0.0).energy_capacity();
+            ship.blocks.insert([0, 0], Block::new(Material::Copper, 100.0, cap * centre));
+            for c in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
+                ship.blocks.insert(c, Block::new(Material::Copper, 100.0, cap * arms));
+            }
+            ship.recompute_com_inertia();
+            w.ships.insert(1, ship);
+            w.apply_conduction();
+            w.ships[&1].blocks[&[0, 0]].energy / cap
+        };
+        approx(cross(0.999, 0.0), 0.5, 0.01);
+        // An empty block surrounded by four full ones fills up half way.
+        approx(cross(0.0, 0.999), 0.5, 0.01);
+    }
+
+    #[test]
+    fn exposed_faces_conduct_into_the_void() {
+        let lost = |material: Material| {
+            let mut w = World::new(1);
+            single_block_ship(&mut w, 1, [0.0, 0.0], material, 1000.0, 0.0);
+            let energy = w.ships[&1].blocks[&[0, 0]].energy_capacity() * 0.5;
+            w.ships.get_mut(&1).unwrap().blocks.get_mut(&[0, 0]).unwrap().energy = energy;
+            w.apply_conduction();
+            (energy - w.ships[&1].blocks[&[0, 0]].energy) / energy
+        };
+        // Four exposed faces at half fill.
+        approx(lost(Material::Iron), 4.0 * consts::props(Material::Iron).conductance * consts::VOID_CONDUCTANCE * 0.5, 1e-5);
+        assert!(lost(Material::Plastic) < lost(Material::Iron) / 20.0, "plastic should insulate against the void");
+        // Silicon only conducts into the void when pointed at it.
+        approx(lost(Material::Silicon), 0.0, 1e-6);
     }
 
     #[test]
@@ -657,20 +748,23 @@ mod tests {
     }
 
     #[test]
-    fn better_conductor_of_a_pair_sets_the_rate() {
+    fn poor_conductor_caps_the_flow_next_to_a_good_one() {
         let lead = consts::props(Material::Lead);
-        let copper = consts::props(Material::Copper);
-        let expected = copper.conductance * 0.5 * (100.0 * lead.energy_per_kg) / 2.0;
-        // Both directions run at copper's rate, limited by lead's smaller capacity.
-        approx(one_tick_flow(Material::Copper, Material::Lead), expected, 1.0);
-        approx(one_tick_flow(Material::Lead, Material::Copper), expected, 1.0);
-        assert!(one_tick_flow(Material::Lead, Material::Lead) < expected / 2.0);
+        let lead_capacity = 100.0 * lead.energy_per_kg;
+        // Half-full lead gives away at most its own conductance share, even into copper.
+        let lead_to_copper = one_tick_flow(Material::Lead, Material::Copper);
+        approx(lead_to_copper, lead.conductance * 0.5 * lead_capacity, 1.0);
+        // Copper still pulls faster than another lead block would.
+        assert!(one_tick_flow(Material::Lead, Material::Lead) < lead_to_copper * 0.75);
+        // Empty lead takes in at most its own conductance share of its capacity, even from copper.
+        approx(one_tick_flow(Material::Copper, Material::Lead), lead.conductance * lead_capacity, 1.0);
     }
 
     #[test]
     fn plastic_isolates_even_next_to_copper() {
         let plastic = consts::props(Material::Plastic);
-        let expected = plastic.conductance * 0.5 * (100.0 * plastic.energy_per_kg) / 2.0;
+        let copper_energy = 0.5 * 100.0 * consts::props(Material::Copper).energy_per_kg;
+        let expected = plastic.conductance * 0.5 * copper_energy;
         approx(one_tick_flow(Material::Copper, Material::Plastic), expected, 1.0);
     }
 
@@ -766,15 +860,52 @@ mod tests {
         let mut w = World::new(1);
         single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
 
-        w.process_emit(&[], 1, [0, 0], Dir::E, 0.0, 1.0);
+        w.process_emit(&[], 1, [0, 0], Dir::E, 2000.0, 1.0);
 
         let ship = &w.ships[&1];
         assert!(ship.vel[0] < -0.5, "thrust east should push the ship west, vel={:?}", ship.vel);
         approx(ship.vel[1], 0.0, 1e-3);
         let energy_left = ship.blocks[&[0, 0]].energy;
-        approx(1_000_000.0 - energy_left, consts::EMIT_ENERGY_PER_KG, 50.0);
+        approx(1_000_000.0 - energy_left, 2000.0, 1.0);
         assert_eq!(w.packets.len(), 1);
         assert!(w.packets[0].vel[0] > 500.0, "packet should move fast in +x");
+        assert!(w.rays.is_empty(), "energy that drives exhaust is not emitted as a ray");
+    }
+
+    #[test]
+    fn thrust_scales_with_mass_times_energy() {
+        let dv = |energy: f32, mass: f32| {
+            let mut w = World::new(1);
+            single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
+            w.process_emit(&[], 1, [0, 0], Dir::E, energy, mass);
+            // Impulse = speed change times the mass left after emitting.
+            -w.ships[&1].vel[0] * w.ships[&1].total_mass
+        };
+        approx(dv(2000.0, 1.0), 2000.0 * consts::EXHAUST_SPEED_PER_J, 1.0);
+        approx(dv(4000.0, 1.0), 2.0 * dv(2000.0, 1.0), 1.0);
+        approx(dv(2000.0, 0.5), 0.5 * dv(2000.0, 1.0), 1.0);
+        // Mass without energy just drifts off.
+        approx(dv(0.0, 1.0), 0.0, 1e-6);
+    }
+
+    #[test]
+    fn burst_mass_only_leaves_through_free_faces() {
+        // A row of three blocks along x; the middle one bursts.
+        let mut w = World::new(1);
+        let mut ship = Ship::new(1, None);
+        ship.blocks.insert([-1, 0], Block::new(Material::Iron, 100.0, 0.0));
+        ship.blocks.insert([0, 0], Block::new(Material::Plastic, 100.0, 1.0e9));
+        ship.blocks.insert([1, 0], Block::new(Material::Iron, 100.0, 0.0));
+        ship.recompute_com_inertia();
+        w.ships.insert(1, ship);
+
+        w.process_bursts(&[]);
+
+        assert_eq!(w.packets.len(), consts::BURST_PACKETS);
+        for p in &w.packets {
+            assert!(p.vel[1].abs() > p.vel[0].abs(), "packet should leave north or south, vel={:?}", p.vel);
+        }
+        assert!(w.packets.iter().any(|p| p.vel[1] > 0.0) && w.packets.iter().any(|p| p.vel[1] < 0.0));
     }
 
     #[test]
@@ -786,22 +917,9 @@ mod tests {
         ship.recompute_com_inertia();
         w.ships.insert(1, ship);
 
-        w.process_emit(&[], 1, [1, 0], Dir::N, 0.0, 1.0);
+        w.process_emit(&[], 1, [1, 0], Dir::N, 2000.0, 1.0);
 
         assert_ne!(w.ships[&1].omega, 0.0, "off-centre thrust should spin the ship");
-    }
-
-    #[test]
-    fn asteroids_cool_passively_but_player_ships_do_not() {
-        let mut w = World::new(1);
-        single_block_ship(&mut w, 1, [0.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
-        single_block_ship(&mut w, 2, [50.0, 0.0], Material::Iron, 1000.0, 1_000_000.0);
-        w.ships.get_mut(&2).unwrap().owner = Some("p".into());
-
-        w.apply_asteroid_cooling();
-
-        approx(w.ships[&1].blocks[&[0, 0]].energy, 1_000_000.0 - consts::ASTEROID_COOLING, 1.0);
-        approx(w.ships[&2].blocks[&[0, 0]].energy, 1_000_000.0, 1e-3);
     }
 
     #[test]
@@ -880,14 +998,14 @@ mod tests {
         three_block_row(&mut w, Material::Silicon);
         w.process_emit(&[], 1, [1, 0], Dir::W, 1.0, 0.0);
         w.apply_conduction();
-        approx(energy_at(&w, [0, 0]), 1_000_000.0, 1e-3);
+        approx(energy_at(&w, [1, 0]), 0.0, 1e-6);
 
         // Pointing north: both neighbours are to the side.
         let mut w = World::new(1);
         three_block_row(&mut w, Material::Silicon);
         w.process_emit(&[], 1, [1, 0], Dir::N, 1.0, 0.0);
         w.apply_conduction();
-        approx(energy_at(&w, [0, 0]), 1_000_000.0, 1e-3);
+        approx(energy_at(&w, [1, 0]), 0.0, 1e-6);
 
         // `all` switches it off again.
         w.process_emit(&[], 1, [1, 0], Dir::All, 1.0, 0.0);
@@ -915,7 +1033,7 @@ mod tests {
 
     /// Queues one tick of mass emission from the single block of ship 1 and steps the world.
     fn step_with_thrust(w: &mut World, dir: Dir) {
-        w.queue_command("p".into(), Command::Emit { ship: 1, block: [0, 0], dir, energy: 0.0, mass: 1.0 });
+        w.queue_command("p".into(), Command::Emit { ship: 1, block: [0, 0], dir, energy: 2000.0, mass: 1.0 });
         w.step();
     }
 

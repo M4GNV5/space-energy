@@ -51,10 +51,14 @@ pub fn sun_in_chunk(seed: u64, cx: i32, cy: i32) -> Option<Sun> {
 /// Plastic also lines the spine and the bus, so the iron hull only touches the
 /// power circuits at the nose and at the lead thrusters.
 ///
+/// The laser and the copper block feeding it are heavy: conduction equalises
+/// fill ratios, so their mass sets how much energy the laser holds and how
+/// much the feed passes on per tick.
+///
 /// The default key binds in `client/src/binds.ts` refer to these cells.
 const STARTER_LAYOUT: [&str; 14] = [
-    "....I....", // 10  laser
-    "..LCCCL..", //  9
+    "....A....", // 10  laser
+    "..LCKCL..", //  9  laser feed
     "..IPTPI..", //  8  battery
     "..IPTPI..", //  7
     "..IPCPI..", //  6
@@ -76,6 +80,8 @@ fn starter_block(ch: char) -> Option<(Material, f32, f32, Option<Dir>)> {
         'I' => (Material::Iron, 300.0, 0.1, None),
         'P' => (Material::Plastic, 100.0, 0.1, None),
         'C' => (Material::Copper, 300.0, 0.1, None),
+        'A' => (Material::Iron, 1500.0, 0.1, None),
+        'K' => (Material::Copper, 1500.0, 0.1, None),
         'T' => (Material::Tungsten, 1500.0, 0.3, None),
         'U' => (Material::Uranium, 1000.0, 0.1, None),
         '^' => (Material::Silicon, 200.0, 0.1, Some(Dir::N)),

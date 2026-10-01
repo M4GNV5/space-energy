@@ -230,7 +230,9 @@ impl Ship {
     }
 
     /// Collects nearby mass packets into this ship's blocks.
-    /// `block = None`: into all matching-material blocks, nearest first.
+    /// `block = None`: into all matching-material blocks, nearest first. What
+    /// does not fit becomes a new block in the free adjacent cell nearest to the
+    /// centre of mass.
     /// `block = Some(cell)`: only into that cell (creating it if empty and adjacent).
     pub fn apply_collect(
         &mut self,
@@ -264,6 +266,28 @@ impl Ship {
                         let room = (max_mass - b.mass).max(0.0);
                         let take = room.min(packet.mass);
                         b.mass += take;
+                        packet.mass -= take;
+                    }
+                    if packet.mass < MIN_BLOCK_MASS {
+                        continue;
+                    }
+                    let in_range = self
+                        .blocks
+                        .keys()
+                        .any(|c| dist(self.local_to_world([c[0] as f32, c[1] as f32]), packet.pos) <= consts::COLLECT_RANGE);
+                    if !in_range {
+                        continue;
+                    }
+                    let com_dist2 = |c: &Cell| (c[0] as f32 - self.com[0]).powi(2) + (c[1] as f32 - self.com[1]).powi(2);
+                    let free_cell = self
+                        .blocks
+                        .keys()
+                        .flat_map(|c| [[c[0] + 1, c[1]], [c[0] - 1, c[1]], [c[0], c[1] + 1], [c[0], c[1] - 1]])
+                        .filter(|c| !self.blocks.contains_key(c))
+                        .min_by(|a, b| com_dist2(a).partial_cmp(&com_dist2(b)).unwrap().then(a.cmp(b)));
+                    if let Some(cell) = free_cell {
+                        let take = consts::props(packet.material).max_mass.min(packet.mass);
+                        self.blocks.insert(cell, Block::new(packet.material, take, 0.0));
                         packet.mass -= take;
                     }
                 }
@@ -402,6 +426,23 @@ mod tests {
 
         approx(ship.blocks[&[0, 0]].mass, 15.0, 1e-4);
         assert!(packets.is_empty(), "packet should be fully consumed");
+    }
+
+    #[test]
+    fn collect_builds_a_new_block_for_a_material_the_ship_lacks() {
+        let mut ship = Ship::new(1, None);
+        ship.blocks.insert([0, 0], Block::new(Material::Iron, 10.0, 0.0));
+        ship.recompute_com_inertia();
+        let packet = |x: f32| Packet { pos: [x, 0.0], vel: [0.0, 0.0], material: Material::Copper, mass: 5.0, age: 0.0 };
+        let mut packets = vec![packet(3.0), packet(4.0), packet(500.0)];
+
+        ship.apply_collect(&mut packets, None, None).unwrap();
+
+        // One new copper block takes both packets in range; the far one stays.
+        let copper: Vec<&Block> = ship.blocks.values().filter(|b| b.material == Material::Copper).collect();
+        assert_eq!(copper.len(), 1);
+        approx(copper[0].mass, 10.0, 1e-4);
+        assert_eq!(packets.len(), 1);
     }
 
     #[test]

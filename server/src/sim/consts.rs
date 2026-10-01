@@ -12,9 +12,13 @@ pub struct MaterialProps {
     /// J per kg of block mass. A block's capacity is this times its mass;
     /// exceeding it bursts the block.
     pub energy_per_kg: f32,
-    /// Fraction of the fill-ratio difference equalised per tick with a neighbour.
-    /// A pair uses the max of both (a good conductor pulls energy through a poor
-    /// one), unless one of them is an isolator. Must stay <= 0.25 for stability.
+    /// Fraction of its energy the fuller block of a pair conducts per tick at a
+    /// fill-ratio difference of 1; scales linearly with the difference. A pair
+    /// uses the max of both (a good conductor pulls energy through a poor one),
+    /// unless one of them is an isolator.
+    /// Also the block's own cap: per tick it gives away at most this fraction of
+    /// its energy (all faces together) and takes in at most this fraction of its
+    /// free capacity, whatever its neighbours are.
     pub conductance: f32,
     /// A pair with an isolator uses the min of both conductances instead.
     pub isolator: bool,
@@ -47,7 +51,7 @@ const IRON: MaterialProps = MaterialProps {
 const COPPER: MaterialProps = MaterialProps {
     max_mass: 8900.0,
     energy_per_kg: 5000.0,
-    conductance: 0.25,
+    conductance: 0.5,
     isolator: false,
     energy_emit_rate: 5_000.0,
     mass_emit_rate: 1.0,
@@ -94,6 +98,11 @@ const SILICON: MaterialProps = MaterialProps {
     mass_emit_rate: 1.0,
 };
 
+// --- Conduction ---
+/// Every face without a neighbour conducts into the void (fill ratio 0) at the
+/// block's own conductance scaled by this. The energy is gone.
+pub const VOID_CONDUCTANCE: f32 = 0.001;
+
 // --- Control signals (silicon) ---
 /// An emit command requesting at least this much energy (J) counts as a control
 /// signal for the block, even if the block has no energy to emit.
@@ -111,10 +120,9 @@ pub const MIN_FALLOFF: f32 = 0.01;
 pub const OMNI_RAYS: usize = 16;
 
 // --- Mass emission ---
-/// Exhaust speed of directed mass emission relative to the emitting block (m/s).
-pub const EXHAUST_SPEED: f32 = 1000.0;
-/// Energy drawn from the emitting block per kg of emitted mass (J/kg).
-pub const EMIT_ENERGY_PER_KG: f32 = 2000.0;
+/// Exhaust speed (m/s) per J of energy emitted together with the mass, relative
+/// to the emitting block. Thrust impulse = mass × energy × this.
+pub const EXHAUST_SPEED_PER_J: f32 = 0.5;
 /// Mass packets disappear after this many seconds.
 pub const PACKET_TTL: f32 = 60.0;
 /// Packets within this distance of a block can be collected (m).
@@ -169,10 +177,6 @@ pub const ASTEROID_SUN_MARGIN: f32 = 50.0;
 pub const ASTEROID_SPEED_MAX: f32 = 2.0;
 /// Max angular speed of a freshly spawned asteroid (rad/s). Added for M3.
 pub const ASTEROID_SPIN_MAX: f32 = 0.3;
-/// Energy every asteroid block radiates away per tick (J), so sunlight alone
-/// does not burst asteroids. A flat rate: it cancels weak sunlight but an
-/// N-block asteroid only shrugs off N times this much laser power.
-pub const ASTEROID_COOLING: f32 = 200.0;
 /// Fraction of sunlight an asteroid block absorbs (rock reflects the rest), so
 /// asteroids near a sun do not burst. Lasers and bursts are not reduced.
 pub const ASTEROID_SUN_ABSORPTION: f32 = 0.01;

@@ -21,12 +21,12 @@ Energy emission:
 - All directions: the energy is split across `OMNI_RAYS` rays with a random angular offset each tick, so that on average it spreads evenly.
 - The first block hit absorbs the energy, including blocks of the emitting ship itself. This is not optional, and it is what makes lasers possible. Emit from exposed faces.
 - The delivered energy weakens with distance (inverse square): `delivered = energy / (1 + (d / FALLOFF_DISTANCE)²)`. Below `MIN_FALLOFF` it becomes zero, which gives a maximum range.
-- Energy lost to falloff, or rays that hit nothing, is gone. This is the energy sink of the universe, so emitting energy into empty space is how ships cool down.
+- Energy lost to falloff, or rays that hit nothing, is gone. Together with conduction into the void (see Multiplayer), this is the energy sink of the universe. Emitting energy into empty space is the fast way to cool a ship down.
 
 Mass emission:
-- Emitted mass becomes **mass packets**: point objects with a material, mass and velocity (`EXHAUST_SPEED` relative to the ship). They drift until collected or until `PACKET_TTL` expires.
-- Directed mass emission gives the ship an equal and opposite impulse at the block's position (thrust plus torque).
-- Emitting mass costs energy from the emitting block: `EMIT_ENERGY_PER_KG`.
+- Emitted mass becomes **mass packets**: point objects with a material, mass and velocity. They drift until collected or until `PACKET_TTL` expires.
+- Energy emitted together with mass drives the exhaust instead of becoming a ray: the packets leave at `energy × EXHAUST_SPEED_PER_J` relative to the block. Mass emitted without energy just drifts off.
+- Directed mass emission gives the ship an equal and opposite impulse at the block's position (thrust plus torque): `impulse = mass × energy × EXHAUST_SPEED_PER_J`.
 - Mass packets do not hit blocks (no collisions for now).
 
 ### Blocks
@@ -37,7 +37,7 @@ Mass emission:
 - A block's energy capacity scales with its mass: `capacity = material J/kg × mass`. A heavier block stores more; a block that loses mass (thrust, uranium decay) can hold less.
 - Energy level = fill ratio (`energy / energy capacity`). *(MVP choice.)*
 - Moved mass takes its share of the block's energy along, so moving mass does not change the source block's fill ratio.
-- When a block's energy exceeds its capacity, it **bursts**: the block is removed, and all of its mass (as packets) and all of its energy (as rays) are emitted in all directions at once. Chain reactions are possible.
+- When a block's energy exceeds its capacity, it **bursts**: the block is removed, and all of its mass (as packets) and all of its energy (as rays) are emitted at once. The energy goes in all directions; the mass only leaves through faces that have no neighbouring block (in all directions if the block is fully enclosed), so mined mass flies out of the asteroid instead of into it. Chain reactions are possible.
 
 ### Block Types
 Each material has a maximum mass, an energy capacity per kg, a conductance (energy flow to adjacent blocks), an emit rate (max energy/mass emitted per tick), and possibly extra effects.
@@ -67,6 +67,7 @@ Control signals: there is no separate "switch" command. An emit command that req
 ### Obtaining Mass
 When a block bursts, it releases all of its mass as packets.
 Any ship can collect nearby packets (within `COLLECT_RANGE`) into any of its blocks with a matching material, or into an adjacent empty cell (which creates a new block of that material).
+A collect without a target cell fills matching blocks first. Mass that does not fit (no block of that material, or all of them full) becomes a new block in the free adjacent cell nearest to the ship's centre of mass.
 Mining = shooting asteroids with energy until their blocks burst, then collecting the mass.
 
 ### Ships and Physics
@@ -92,7 +93,12 @@ Mining = shooting asteroids with energy until their blocks burst, then collectin
 The main game server (written in Rust) hosts a websocket server allowing multiple browsers to connect.
 The game server is authoritative. It is responsible for:
 - tracking all ships, their position, rotation and blocks, as well as mass and energy levels
-- automatically moving energy between adjacent blocks of a ship. Energy flows from higher fill ratio to lower. The better conductor of a pair sets the rate (lead next to copper exchanges energy at copper's rate), except that a pair with an isolator (plastic) uses the lower conductance
+- automatically moving energy between adjacent blocks of a ship:
+  - Energy flows from higher fill ratio to lower, and faster the bigger the difference: per tick the fuller block conducts `conductance × fill difference` of its own energy. Copper (0.5) at 99.9% next to an empty block conducts half of its energy, at 50% a quarter.
+  - A flow never goes past the point where both fill ratios are equal.
+  - The better conductor of a pair sets the rate (lead next to copper exchanges energy at copper's rate), except that a pair with an isolator (plastic) uses the lower conductance.
+  - A block's own conductance is also its cap: per tick it gives away at most that fraction of its energy over all faces together, and takes in at most that fraction of its free capacity. So only copper can move half of its energy in a tick; lead (0.05) stays slow even next to copper or when very hot.
+  - Every face with no neighbouring block conducts into the void, which counts as always empty. The rate is the block's own conductance times `VOID_CONDUCTANCE`, and the energy is gone. This applies to ships and asteroids alike; plastic on the outside insulates. Silicon only conducts into the void through the face it points at
 - the basic 2D physics described above
 
 Connected users can send commands for the ships they own:
