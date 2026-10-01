@@ -7,11 +7,11 @@ services:
     restart: unless-stopped
     networks:
       - web
-    environment:
-      # Only used when no save exists yet; unset means a random world.
-      - SEED
+    # Only used when no save exists yet; unset means a random world.
+    # environment:
+    #   - SEED
     volumes:
-      - save:/data
+      - ./save:/data
     stop_grace_period: 30s
     cpus: 4
     mem_limit: 8g
@@ -22,9 +22,6 @@ services:
       - "traefik.http.routers.space-energy.tls=true"
       - "traefik.http.routers.space-energy.tls.certresolver=le"
       - "traefik.http.services.space-energy.loadbalancer.server.port=8080"
-
-volumes:
-  save:
 
 networks:
   web:
